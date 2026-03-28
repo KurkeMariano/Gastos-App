@@ -699,39 +699,51 @@ export default function App(){
     totals:computeTotals(), savedAt:new Date().toISOString(),
   })
 
-  const doSave=async(report)=>{
+  // Build CSV content for a report (shared by both save paths)
+  const buildReportCSV=(report)=>{
     const nh=[report,...history.filter(h=>h.month!==report.month)]
-    const analytics=computeAnalytics(nh)
-    const csv=buildCSV(report,analytics)
-    const filename=`presupuesto_${report.month}.csv`
-    setSaveMsg(null)
-    if(drive.status==='connected'){
-      try{
-        // Reuse existing Drive file ID if we loaded this month from Drive before
-        const existing=history.find(h=>h.month===report.month)
-        const fileId=existing?._driveFileId||null
-        const result=await drive.uploadCSV(filename,csv,fileId)
-        // Tag the saved report with its Drive file ID for future updates
-        const taggedReport={...report,_driveFileId:result.id}
-        const taggedHistory=[taggedReport,...history.filter(h=>h.month!==report.month)]
-        persist(taggedHistory)
-        setSaveMsg({type:'ok',text:`Guardado en Google Drive: ${filename}`})
-      }catch(err){
-        setSaveMsg({type:'err',text:`Error al subir a Drive: ${err.message}`})
-      }
-    } else {
-      persist(nh)
-      const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'})
-      const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url)
-      setSaveMsg({type:'warn',text:'Descargado localmente. Conectá Drive para guardar en la nube.'})
+    return{csv:buildCSV(report,computeAnalytics(nh)),filename:`presupuesto_${report.month}.csv`,nh}
+  }
+
+  // ── Auto-save to Drive (called silently when report is generated) ──────────
+  const saveToDrive=async(report)=>{
+    if(drive.status!=='connected') return
+    try{
+      const{csv,filename,nh}=buildReportCSV(report)
+      const existing=history.find(h=>h.month===report.month)
+      const fileId=existing?._driveFileId||null
+      const result=await drive.uploadCSV(filename,csv,fileId)
+      const tagged={...report,_driveFileId:result.id}
+      persist([tagged,...history.filter(h=>h.month!==report.month)])
+      setSaveMsg({type:'ok',text:`✓ Guardado en Drive: ${filename}`})
+    }catch(err){
+      setSaveMsg({type:'err',text:`No se pudo guardar en Drive: ${err.message}`})
     }
+  }
+
+  // ── Local download (triggered only by "Descargar CSV" button) ────────────
+  const downloadLocalCSV=(report)=>{
+    const{csv,filename}=buildReportCSV(report)
+    const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'})
+    const url=URL.createObjectURL(blob)
+    const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url)
   }
 
   const goNext=async()=>{
     if(!validate())return
     if(step===3&&!finalized){setFinalized(true);return}
-    if(step===4){const r=buildReport();await doSave(r)}
-    else setStep(s=>s+1)
+    if(step===3&&finalized){
+      // Advance to report AND persist + auto-save to Drive in background
+      const r=buildReport()
+      const nh=[r,...history.filter(h=>h.month!==r.month)]
+      persist(nh)
+      setStep(4)
+      setSaveMsg(null)
+      // Fire-and-forget — user sees the report immediately, Drive saves silently
+      saveToDrive(r)
+      return
+    }
+    setStep(s=>s+1)
   }
 
   const resetForm=()=>{
@@ -895,9 +907,21 @@ export default function App(){
             {step===4&&currentReport&&(
               <>
                 <ReportView report={currentReport}/>
-                {saveMsg&&(
-                  <div style={{marginBottom:'1rem',padding:'0.75rem 1rem',background:saveMsg.type==='ok'?`${C.greenDim}22`:saveMsg.type==='err'?`${C.redDim}22`:`${C.amberDim}22`,border:`1px solid ${saveMsg.type==='ok'?C.greenDim:saveMsg.type==='err'?C.redDim:C.amber}`,borderRadius:'8px',fontSize:'12px',fontFamily:'monospace',color:saveMsg.type==='ok'?C.green:saveMsg.type==='err'?C.red:C.amberLight}}>
-                    {saveMsg.type==='ok'?'✓ ':saveMsg.type==='err'?'✕ ':'⚠ '}{saveMsg.text}
+                {/* Drive auto-save status */}
+                {drive.status==='connected'&&(
+                  <div style={{marginBottom:'1rem',padding:'0.75rem 1rem',
+                    background:saveMsg?.type==='ok'?`${C.greenDim}22`:saveMsg?.type==='err'?`${C.redDim}22`:`${C.teal}11`,
+                    border:`1px solid ${saveMsg?.type==='ok'?C.greenDim:saveMsg?.type==='err'?C.redDim:C.teal+'44'}`,
+                    borderRadius:'8px',fontSize:'12px',fontFamily:'monospace',
+                    color:saveMsg?.type==='ok'?C.green:saveMsg?.type==='err'?C.red:C.teal,
+                    display:'flex',alignItems:'center',gap:'8px'}}>
+                    {!saveMsg&&<><span style={{display:'inline-block',width:'6px',height:'6px',borderRadius:'50%',background:C.teal,animation:'pulse 1s infinite'}}/>Guardando en Drive…</>}
+                    {saveMsg&&<>{saveMsg.type==='ok'?'✓ ':saveMsg.type==='err'?'✕ ':''}{saveMsg.text}</>}
+                  </div>
+                )}
+                {drive.status!=='connected'&&(
+                  <div style={{marginBottom:'1rem',padding:'0.75rem 1rem',background:`${C.amberDim}11`,border:`1px solid ${C.amber}44`,borderRadius:'8px',fontSize:'12px',fontFamily:'monospace',color:C.amberLight}}>
+                    ⚠ Drive no conectado — el reporte se guardó localmente. Conectá Drive para sincronizar en la nube.
                   </div>
                 )}
               </>
@@ -906,11 +930,11 @@ export default function App(){
             {/* Nav */}
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:'1.5rem',paddingTop:'1.25rem',borderTop:`1px solid ${C.border}`}}>
               <div style={{display:'flex',gap:'8px'}}>
-                {step>0&&<button style={btnSec} onClick={()=>{if(step===3&&finalized)setFinalized(false);else setStep(s=>s-1)}}>← Atrás</button>}
-                {step===4&&<button style={btnSec} onClick={resetForm}>+ Nuevo</button>}
+                {step>0&&step<4&&<button style={btnSec} onClick={()=>{if(step===3&&finalized)setFinalized(false);else setStep(s=>s-1)}}>← Atrás</button>}
+                {step===4&&<button style={btnSec} onClick={resetForm}>+ Nuevo mes</button>}
               </div>
               {step<4&&<button style={btnPrimary} onClick={goNext}>{step===3&&!finalized?'✓ Finalizar':step===3&&finalized?'Ver reporte →':'Continuar →'}</button>}
-              {step===4&&<button style={btnPrimary} onClick={goNext}>↓ Guardar CSV</button>}
+              {step===4&&currentReport&&<button style={btnSec} onClick={()=>downloadLocalCSV(currentReport)}>↓ Descargar CSV</button>}
             </div>
           </>
         )}
@@ -965,11 +989,13 @@ export default function App(){
             <>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1.25rem'}}>
                 <button style={btnSec} onClick={()=>setHistDetail(null)}>← Volver</button>
-                <button style={btnPrimary} onClick={()=>doSave(histDetail)}>↓ Guardar CSV</button>
+                <div style={{display:'flex',gap:'8px'}}>
+                  <button style={btnSec} onClick={()=>downloadLocalCSV(histDetail)}>↓ Descargar CSV</button>
+                  {drive.status==='connected'&&<button style={btnPrimary} onClick={()=>saveToDrive(histDetail)}>↑ Guardar en Drive</button>}
+                </div>
               </div>
               <div style={{fontSize:'20px',fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",marginBottom:'1.25rem'}}>{monthLabel(histDetail.month)}</div>
               <ReportView report={histDetail}/>
-              {saveMsg&&<div style={{marginBottom:'1rem',padding:'0.75rem 1rem',background:saveMsg.type==='ok'?`${C.greenDim}22`:`${C.amberDim}22`,border:`1px solid ${saveMsg.type==='ok'?C.greenDim:C.amber}`,borderRadius:'8px',fontSize:'12px',fontFamily:'monospace',color:saveMsg.type==='ok'?C.green:C.amberLight}}>{saveMsg.type==='ok'?'✓ ':'⚠ '}{saveMsg.text}</div>}
             </>
           )
         )}
