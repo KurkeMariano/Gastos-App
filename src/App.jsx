@@ -275,7 +275,22 @@ function useDrive(onHistoryLoaded) {
     }
   }, [token])
 
-  return { token, status, syncStatus, syncCount, connect, disconnect, uploadCSV, isConfigured: !!GOOGLE_CLIENT_ID }
+  // ── permanently delete a file from Drive ─────────────────────────────────
+  const deleteFile = async (fileId) => {
+    if (!token) throw new Error('not_connected')
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+    )
+    // 204 = deleted, 404 = already gone — both OK
+    if (res.status !== 204 && res.status !== 404 && !res.ok) {
+      const err = await res.json().catch(()=>({}))
+      if (err?.error?.code === 401) { setToken(null); setStatus('idle') }
+      throw new Error(err?.error?.message || `HTTP ${res.status}`)
+    }
+  }
+
+  return { token, status, syncStatus, syncCount, connect, disconnect, uploadCSV, deleteFile, isConfigured: !!GOOGLE_CLIENT_ID }
 }
 
 // ─── ANALYTICS ENGINE ────────────────────────────────────────────────────────
@@ -334,6 +349,14 @@ function BarChart({data}){
         <div style={{display:'flex',alignItems:'center',gap:'4px'}}><div style={{width:'8px',height:'8px',background:C.green,borderRadius:'2px',opacity:0.75}}/><span style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace'}}>Ingreso</span></div>
         <div style={{display:'flex',alignItems:'center',gap:'4px'}}><div style={{width:'8px',height:'8px',background:C.red,borderRadius:'2px',opacity:0.75}}/><span style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace'}}>Gasto</span></div>
       </div>
+
+      {/* ── Confirm delete dialog (portal-style fixed overlay) ── */}
+      <ConfirmDialog
+        report={deleteConfirm}
+        deleting={deleting}
+        onConfirm={()=>deleteRecord(deleteConfirm)}
+        onCancel={()=>setDeleteConfirm(null)}
+      />
     </div>
   )
 }
@@ -605,6 +628,49 @@ function ReportView({report}){
   )
 }
 
+// ─── CONFIRM DIALOG ──────────────────────────────────────────────────────────
+function ConfirmDialog({report, deleting, onConfirm, onCancel}){
+  if (!report) return null
+  const hasDrive = !!report._driveFileId
+  return(
+    // Full-screen overlay — normal-flow so it contributes height
+    <div style={{position:'fixed',inset:0,background:'rgba(7,9,15,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:999,padding:'1rem'}}>
+      <div style={{background:'#131b2a',border:'1px solid #b91c1c',borderRadius:'14px',padding:'1.75rem',maxWidth:'360px',width:'100%',boxShadow:'0 0 40px rgba(239,68,68,0.15)'}}>
+        <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:'#ef4444',marginBottom:'1rem'}}>// CONFIRMAR ELIMINACIÓN</div>
+        <div style={{fontFamily:'monospace',fontSize:'16px',fontWeight:600,color:'#dce8f5',marginBottom:'0.5rem'}}>
+          {monthLabel(report.month)}
+        </div>
+        <div style={{fontSize:'13px',color:'#8ca5be',fontFamily:'monospace',lineHeight:1.6,marginBottom:'1.5rem'}}>
+          {hasDrive
+            ? 'Esto eliminará el registro del historial local y del archivo en Google Drive. No se puede deshacer.'
+            : 'Esto eliminará el registro del historial local. No se puede deshacer.'}
+        </div>
+        {hasDrive && (
+          <div style={{display:'flex',alignItems:'center',gap:'6px',padding:'8px 12px',background:'rgba(239,68,68,0.08)',border:'1px solid rgba(239,68,68,0.2)',borderRadius:'8px',marginBottom:'1.25rem',fontSize:'12px',fontFamily:'monospace',color:'#f87171'}}>
+            <span>✕</span> También se eliminará el archivo de Drive
+          </div>
+        )}
+        <div style={{display:'flex',gap:'10px',justifyContent:'flex-end'}}>
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            style={{background:'transparent',color:'#8ca5be',border:'1px solid #1c2a3e',borderRadius:'8px',padding:'9px 18px',fontSize:'13px',fontFamily:'monospace',cursor:'pointer',opacity:deleting?0.5:1}}
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            style={{background:'#b91c1c',color:'#fff',border:'none',borderRadius:'8px',padding:'9px 18px',fontSize:'13px',fontFamily:'monospace',fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px',opacity:deleting?0.7:1}}
+          >
+            {deleting ? 'Eliminando…' : '✕ Eliminar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const btnPrimary={background:`linear-gradient(135deg,${C.amber},${C.amberDim})`,color:'#07090f',border:'none',borderRadius:'8px',padding:'11px 20px',fontSize:'14px',fontFamily:'monospace',fontWeight:700,letterSpacing:'1px',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px',boxShadow:`0 0 18px ${C.amberGlow}`,touchAction:'manipulation'}
 const btnAdd    ={background:`${C.amber}18`,color:C.amberLight,border:`1.5px solid ${C.amber}`,borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontFamily:'monospace',fontWeight:700,letterSpacing:'1px',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px',boxShadow:`0 0 14px ${C.amberGlow}`,touchAction:'manipulation'}
@@ -645,6 +711,8 @@ export default function App(){
   const [errors,    setErrors]    = useState({})
   const [saveMsg,   setSaveMsg]   = useState(null)
   const [histDetail,setHistDetail]= useState(null)
+  const [deleteConfirm,setDeleteConfirm]= useState(null)  // report to confirm-delete
+  const [deleting,setDeleting]= useState(false)
   const cardId=useRef(5), othId=useRef(2)
 
   // Persist history to LS and state together
@@ -727,6 +795,29 @@ export default function App(){
     const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'})
     const url=URL.createObjectURL(blob)
     const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url)
+  }
+
+  // ── delete a month record locally + from Drive ───────────────────────────
+  const deleteRecord = async (report) => {
+    setDeleting(true)
+    try {
+      // 1. Remove from Drive if we have a file ID and Drive is connected
+      if (report._driveFileId && drive.status === 'connected') {
+        await drive.deleteFile(report._driveFileId)
+      }
+      // 2. Remove from local history
+      const nh = history.filter(h => h.month !== report.month)
+      persist(nh)
+    } catch(err) {
+      console.error('Delete failed:', err)
+      // Still remove locally even if Drive delete failed
+      const nh = history.filter(h => h.month !== report.month)
+      persist(nh)
+    } finally {
+      setDeleting(false)
+      setDeleteConfirm(null)
+      setHistDetail(null)
+    }
   }
 
   const goNext=async()=>{
@@ -965,8 +1056,8 @@ export default function App(){
                 const bal=h.totals?.balancePesos??0
                 return(
                   <div key={i} className="hist-card" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:'10px',padding:'1.1rem',marginBottom:'0.75rem',cursor:'pointer',transition:'border-color 0.15s,background 0.15s'}} onClick={()=>setHistDetail(h)}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                      <div>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'8px'}}>
+                      <div style={{flex:1,minWidth:0}}>
                         <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'5px'}}>
                           <span style={{fontFamily:'monospace',fontSize:'15px',fontWeight:600}}>{monthLabel(h.month)}</span>
                           {h._driveFileId&&<span style={{fontSize:'9px',fontFamily:'monospace',color:C.teal,background:`${C.teal}15`,border:`1px solid ${C.teal}33`,borderRadius:'4px',padding:'1px 6px'}}>DRIVE</span>}
@@ -976,9 +1067,15 @@ export default function App(){
                           <span style={{background:C.tag,border:`1px solid ${C.border}`,borderRadius:'5px',padding:'3px 8px',fontSize:'11px',color:C.textDim,fontFamily:'monospace'}}>↓ {fmtP(h.totals?.expensesPesos)}</span>
                         </div>
                       </div>
-                      <div style={{textAlign:'right'}}>
-                        <div style={{fontSize:'9px',fontFamily:'monospace',color:C.textMuted,letterSpacing:'1px',marginBottom:'3px'}}>BALANCE</div>
-                        <div style={{fontFamily:'monospace',fontSize:'18px',fontWeight:700,color:bal>=0?C.green:C.red}}>{bal<0?'-':''}{fmtP(Math.abs(bal))}</div>
+                      <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'8px',flexShrink:0}}>
+                        <div style={{textAlign:'right'}}>
+                          <div style={{fontSize:'9px',fontFamily:'monospace',color:C.textMuted,letterSpacing:'1px',marginBottom:'3px'}}>BALANCE</div>
+                          <div style={{fontFamily:'monospace',fontSize:'18px',fontWeight:700,color:bal>=0?C.green:C.red}}>{bal<0?'-':''}{fmtP(Math.abs(bal))}</div>
+                        </div>
+                        <button
+                          onClick={e=>{e.stopPropagation();setDeleteConfirm(h)}}
+                          style={{background:'transparent',color:C.red,border:`1px solid ${C.redDim}55`,borderRadius:'6px',padding:'4px 10px',fontSize:'11px',fontFamily:'monospace',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'4px',touchAction:'manipulation'}}
+                        >✕ Borrar</button>
                       </div>
                     </div>
                   </div>
@@ -987,11 +1084,15 @@ export default function App(){
             </>
           ):(
             <>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1.25rem'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1.25rem',flexWrap:'wrap',gap:'8px'}}>
                 <button style={btnSec} onClick={()=>setHistDetail(null)}>← Volver</button>
-                <div style={{display:'flex',gap:'8px'}}>
+                <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
                   <button style={btnSec} onClick={()=>downloadLocalCSV(histDetail)}>↓ Descargar CSV</button>
-                  {drive.status==='connected'&&<button style={btnPrimary} onClick={()=>saveToDrive(histDetail)}>↑ Guardar en Drive</button>}
+                  {drive.status==='connected'&&<button style={btnPrimary} onClick={()=>saveToDrive(histDetail)}>↑ Drive</button>}
+                  <button
+                    onClick={()=>setDeleteConfirm(histDetail)}
+                    style={{background:'transparent',color:C.red,border:`1px solid ${C.redDim}55`,borderRadius:'8px',padding:'10px 14px',fontSize:'13px',fontFamily:'monospace',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px',touchAction:'manipulation'}}
+                  >✕ Borrar mes</button>
                 </div>
               </div>
               <div style={{fontSize:'20px',fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",marginBottom:'1.25rem'}}>{monthLabel(histDetail.month)}</div>
@@ -1012,6 +1113,15 @@ export default function App(){
         )}
 
       </div>
+
+      {/* ── CONFIRM DELETE DIALOG ─────────────────────────────────────── */}
+      <ConfirmDialog
+        report={deleteConfirm}
+        deleting={deleting}
+        onConfirm={()=>deleteRecord(deleteConfirm)}
+        onCancel={()=>setDeleteConfirm(null)}
+      />
+
     </div>
   )
 }
