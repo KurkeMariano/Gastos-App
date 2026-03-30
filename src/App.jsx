@@ -31,6 +31,18 @@ function getCurrentMonth(){const d=new Date();return `${d.getFullYear()}-${Strin
 function monthLabel(m){if(!m)return '';const[y,mo]=m.split('-');const ms=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];return `${ms[parseInt(mo)-1]} ${y}`}
 function monthShort(m){if(!m)return '';const[y,mo]=m.split('-');const ms=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];return `${ms[parseInt(mo)-1]} ${y.slice(2)}`}
 
+// ─── FIXED EXPENSES HELPERS ──────────────────────────────────────────────────
+function getFixedAmountForMonth(fe, month) {
+  const applicable = fe.priceHistory.filter(ph => ph.fromMonth <= month)
+  if (!applicable.length) return fe.priceHistory[0]?.amount || 0
+  return applicable[applicable.length - 1].amount
+}
+function getActiveFixed(fixedExpenses, month) {
+  return fixedExpenses
+    .filter(fe => fe.createdMonth <= month && (fe.deletedMonth === null || fe.deletedMonth > month))
+    .map(fe => ({ id: fe.id, description: fe.description, currency: fe.currency, amount: getFixedAmountForMonth(fe, month) }))
+}
+
 // ─── LOCAL STORAGE ───────────────────────────────────────────────────────────
 const LS={
   get: k=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}},
@@ -80,6 +92,15 @@ function buildCSV(report, analytics) {
     L.push(row('=== OTROS GASTOS ==='))
     L.push(row('Descripción','Moneda','Monto'))
     report.otherExpenses.filter(e=>e.description||e.amount).forEach(e=>
+      L.push(row(e.description||'Sin descripción',e.currency==='pesos'?'Pesos':'Dólares',
+        (e.amount||0).toLocaleString('es-AR',{minimumFractionDigits:2}))))
+    L.push('')
+  }
+
+  if (report.fixedExpenses?.length) {
+    L.push(row('=== GASTOS FIJOS ==='))
+    L.push(row('Descripción','Moneda','Monto'))
+    report.fixedExpenses.forEach(e=>
       L.push(row(e.description||'Sin descripción',e.currency==='pesos'?'Pesos':'Dólares',
         (e.amount||0).toLocaleString('es-AR',{minimumFractionDigits:2}))))
     L.push('')
@@ -303,6 +324,7 @@ function computeAnalytics(history) {
     h.cards?.forEach(c=>{ const k=`${c.bank||'Sin nombre'} (${c.type?.toUpperCase?.()})`; allItems[k]=(allItems[k]||0)+(c.pesos||0) })
     if(h.rent>0) allItems['Alquiler']=(allItems['Alquiler']||0)+h.rent
     h.otherExpenses?.forEach(e=>{ if(!e.description&&!e.amount)return; const k=e.description||'Sin descripción'; allItems[k]=(allItems[k]||0)+(e.currency==='pesos'?(e.amount||0):0) })
+    h.fixedExpenses?.forEach(e=>{ if(!e.description&&!e.amount)return; const k=`[Fijo] ${e.description||'Sin descripción'}`; allItems[k]=(allItems[k]||0)+(e.currency==='pesos'?(e.amount||0):0) })
   })
   const topItems=Object.entries(allItems).filter(([,v])=>v>0).sort(([,a],[,b])=>b-a).slice(0,6)
   const trendData=sorted.slice(-6).map(h=>({month:h.month,expenses:h.totals?.expensesPesos||0,income:h.income?.pesos||0,balance:h.totals?.balancePesos||0}))
@@ -612,6 +634,24 @@ function ReportView({report}){
           ))}
         </div>
       )}
+      {report.fixedExpenses?.length>0&&(
+        <div style={cS}>
+          <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.amber,marginBottom:'0.6rem'}}>//  GASTOS FIJOS</div>
+          {report.fixedExpenses.map((e,i,arr)=>(
+            <div key={i} style={i===arr.length-1?{...rRow,borderBottom:'none'}:rRow}>
+              <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                <span style={{fontSize:'9px',fontFamily:'monospace',color:C.teal,background:`${C.teal}15`,border:`1px solid ${C.teal}33`,borderRadius:'4px',padding:'1px 5px'}}>FIJO</span>
+                <span style={{fontFamily:'monospace',fontSize:'12px',color:C.textDim,overflow:'hidden',textOverflow:'ellipsis',maxWidth:'55%'}}>{e.description||'Sin descripción'}</span>
+              </div>
+              <span style={{fontFamily:'monospace',color:C.red,fontSize:'13px'}}>{e.currency==='pesos'?fmtP(e.amount):fmtD(e.amount)}</span>
+            </div>
+          ))}
+          <div style={{...rRow,borderBottom:'none',paddingTop:'10px'}}>
+            <span style={{fontFamily:'monospace',fontSize:'11px',color:C.textMuted}}>SUBTOTAL FIJOS</span>
+            <span style={{fontFamily:'monospace',color:C.red}}>{fmtP(report.fixedExpenses.filter(e=>e.currency==='pesos').reduce((a,e)=>a+(e.amount||0),0))}</span>
+          </div>
+        </div>
+      )}
       <div style={{background:balP>=0?C.greenBg:C.redBg,border:`2px solid ${balP>=0?C.greenDim:C.redDim}`,borderRadius:'12px',padding:'1.25rem',marginBottom:'1.25rem'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'8px',marginBottom:balD!==0?'0.75rem':0}}>
           <span style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:balP>=0?C.green:C.red}}>//  BALANCE FINAL $</span>
@@ -671,6 +711,149 @@ function ConfirmDialog({report, deleting, onConfirm, onCancel}){
   )
 }
 
+// ─── FIXED EXPENSES VIEW ─────────────────────────────────────────────────────
+function FixedExpensesView({fixedExpenses, onUpdate}){
+  const [showAdd,    setShowAdd]    = useState(false)
+  const [addForm,    setAddForm]    = useState({description:'',amount:'',currency:'pesos'})
+  const [addError,   setAddError]   = useState('')
+  const [editId,     setEditId]     = useState(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [showInactive, setShowInactive] = useState(false)
+
+  const curMonth = getCurrentMonth()
+  const active   = fixedExpenses.filter(fe=>fe.deletedMonth===null||fe.deletedMonth>curMonth)
+  const inactive = fixedExpenses.filter(fe=>fe.deletedMonth!==null&&fe.deletedMonth<=curMonth)
+
+  const handleAdd=()=>{
+    if(!addForm.description.trim()){setAddError('Ingresá una descripción');return}
+    if(!addForm.amount||parseFloat(addForm.amount)<=0){setAddError('Ingresá un monto válido');return}
+    const fe={id:Date.now(),description:addForm.description.trim(),currency:addForm.currency,createdMonth:curMonth,deletedMonth:null,priceHistory:[{fromMonth:curMonth,amount:parseFloat(addForm.amount)}]}
+    onUpdate([...fixedExpenses,fe])
+    setAddForm({description:'',amount:'',currency:'pesos'});setAddError('');setShowAdd(false)
+  }
+
+  const handleDelete=id=>{
+    onUpdate(fixedExpenses.map(fe=>fe.id===id?{...fe,deletedMonth:curMonth}:fe))
+  }
+
+  const handleUpdatePrice=id=>{
+    if(!editAmount||parseFloat(editAmount)<=0)return
+    onUpdate(fixedExpenses.map(fe=>{
+      if(fe.id!==id)return fe
+      const filtered=fe.priceHistory.filter(ph=>ph.fromMonth<curMonth)
+      return{...fe,priceHistory:[...filtered,{fromMonth:curMonth,amount:parseFloat(editAmount)}]}
+    }))
+    setEditId(null);setEditAmount('')
+  }
+
+  const cS={background:'#131b2a',border:`1px solid ${C.border}`,borderRadius:'12px',padding:'1.25rem',marginBottom:'1rem'}
+  const rRow={display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}`}
+
+  return(
+    <>
+      <div style={{marginBottom:'1.5rem',display:'flex',justifyContent:'space-between',alignItems:'flex-end',flexWrap:'wrap',gap:'8px'}}>
+        <div>
+          <div style={{fontSize:'20px',fontWeight:700,fontFamily:"'IBM Plex Mono',monospace"}}>Gastos Fijos</div>
+          <div style={{fontSize:'11px',color:C.textMuted,fontFamily:'monospace',letterSpacing:'1px',marginTop:'4px'}}>{active.length} activo{active.length!==1?'s':''}</div>
+        </div>
+        {!showAdd&&<button className="add-btn" style={{background:`${C.amber}18`,color:C.amberLight,border:`1.5px solid ${C.amber}`,borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontFamily:'monospace',fontWeight:700,letterSpacing:'1px',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px',touchAction:'manipulation'}} onClick={()=>setShowAdd(true)}>＋ Agregar</button>}
+      </div>
+
+      {showAdd&&(
+        <div style={{background:'#131b2a',border:`1px solid ${C.amber}55`,borderRadius:'12px',padding:'1.25rem',marginBottom:'1.25rem'}}>
+          <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.amber,marginBottom:'1rem'}}>// NUEVO GASTO FIJO</div>
+          <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:'8px',marginBottom:'0.75rem'}}>
+            <div>
+              <label style={{display:'block',fontSize:'11px',color:C.textMuted,marginBottom:'4px',fontFamily:'monospace'}}>DESCRIPCIÓN</label>
+              <input type="text" placeholder="Ej: Netflix" value={addForm.description} onChange={e=>setAddForm(p=>({...p,description:e.target.value}))} style={{background:'#0f1623',border:`1px solid ${C.borderLight}`,borderRadius:'8px',color:C.text,padding:'12px 14px',fontSize:'16px',fontFamily:'monospace',width:'100%',boxSizing:'border-box',outline:'none',WebkitAppearance:'none'}}/>
+            </div>
+            <div>
+              <label style={{display:'block',fontSize:'11px',color:C.textMuted,marginBottom:'4px',fontFamily:'monospace'}}>MONTO</label>
+              <input type="number" min="0" inputMode="decimal" placeholder="0.00" value={addForm.amount} onChange={e=>setAddForm(p=>({...p,amount:e.target.value}))} style={{background:'#0f1623',border:`1px solid ${C.borderLight}`,borderRadius:'8px',color:C.text,padding:'12px 14px',fontSize:'16px',fontFamily:'monospace',width:'100%',boxSizing:'border-box',outline:'none',WebkitAppearance:'none'}}/>
+            </div>
+            <div>
+              <label style={{display:'block',fontSize:'11px',color:C.textMuted,marginBottom:'4px',fontFamily:'monospace'}}>MONEDA</label>
+              <select value={addForm.currency} onChange={e=>setAddForm(p=>({...p,currency:e.target.value}))} style={{background:'#0f1623',border:`1px solid ${C.borderLight}`,borderRadius:'8px',color:C.text,padding:'12px 14px',fontSize:'16px',fontFamily:'monospace',width:'100%',boxSizing:'border-box',outline:'none',cursor:'pointer',WebkitAppearance:'none'}}>
+                <option value="pesos">$</option>
+                <option value="dollars">USD</option>
+              </select>
+            </div>
+          </div>
+          {addError&&<div style={{color:C.red,fontSize:'12px',fontFamily:'monospace',marginBottom:'0.5rem'}}>{addError}</div>}
+          <div style={{fontSize:'11px',color:C.textMuted,fontFamily:'monospace',marginBottom:'0.75rem'}}>Se incluirá automáticamente desde {monthLabel(curMonth)}</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button style={{background:`linear-gradient(135deg,${C.amber},${C.amberDim})`,color:'#07090f',border:'none',borderRadius:'8px',padding:'11px 20px',fontSize:'14px',fontFamily:'monospace',fontWeight:700,cursor:'pointer'}} onClick={handleAdd}>✓ Guardar</button>
+            <button style={{background:'transparent',color:C.textDim,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 16px',fontSize:'13px',fontFamily:'monospace',cursor:'pointer'}} onClick={()=>{setShowAdd(false);setAddError('')}}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {active.length===0&&!showAdd&&(
+        <div style={{textAlign:'center',padding:'3rem 1rem',color:C.textMuted,fontFamily:'monospace'}}>
+          <div style={{fontSize:'36px',marginBottom:'1rem',opacity:0.3}}>◈</div>
+          <div>Sin gastos fijos configurados</div>
+          <div style={{fontSize:'12px',marginTop:'8px'}}>Agregá gastos que se repiten cada mes</div>
+        </div>
+      )}
+
+      {active.map(fe=>{
+        const curAmount=getFixedAmountForMonth(fe,curMonth)
+        const isEditing=editId===fe.id
+        return(
+          <div key={fe.id} style={{background:'#131b2a',border:`1px solid ${C.border}`,borderRadius:'10px',padding:'1.1rem',marginBottom:'0.75rem'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'8px'}}>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:'monospace',fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>{fe.description}</div>
+                <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
+                  <span style={{fontFamily:'monospace',fontSize:'18px',fontWeight:700,color:C.red}}>{fe.currency==='pesos'?fmtP(curAmount):fmtD(curAmount)}</span>
+                  {fe.priceHistory.length>1&&<span style={{fontSize:'10px',fontFamily:'monospace',color:C.textMuted,background:`${C.teal}15`,border:`1px solid ${C.teal}33`,borderRadius:'4px',padding:'1px 6px'}}>{fe.priceHistory.length} precios</span>}
+                </div>
+                <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',marginTop:'4px'}}>Desde {monthLabel(fe.createdMonth)}</div>
+              </div>
+              <button style={{background:'transparent',color:C.red,border:`1px solid ${C.redDim}44`,borderRadius:'6px',padding:'6px 10px',fontSize:'12px',cursor:'pointer',fontFamily:'monospace'}} onClick={()=>handleDelete(fe.id)}>✕ Eliminar</button>
+            </div>
+            {isEditing?(
+              <div style={{marginTop:'0.75rem',display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
+                <input type="number" min="0" inputMode="decimal" placeholder="Nuevo monto" value={editAmount} onChange={e=>setEditAmount(e.target.value)} autoFocus
+                  style={{background:'#0f1623',border:`1px solid ${C.amber}`,borderRadius:'8px',color:C.text,padding:'8px 12px',fontSize:'14px',fontFamily:'monospace',width:'160px',outline:'none'}}/>
+                <button style={{background:`linear-gradient(135deg,${C.amber},${C.amberDim})`,color:'#07090f',border:'none',borderRadius:'8px',padding:'9px 16px',fontSize:'13px',fontFamily:'monospace',fontWeight:700,cursor:'pointer'}} onClick={()=>handleUpdatePrice(fe.id)}>✓ Actualizar</button>
+                <button style={{background:'transparent',color:C.textDim,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'8px 12px',fontSize:'13px',fontFamily:'monospace',cursor:'pointer'}} onClick={()=>{setEditId(null);setEditAmount('')}}>Cancelar</button>
+              </div>
+            ):(
+              <div style={{marginTop:'0.75rem'}}>
+                <button style={{background:`${C.blue}18`,color:'#93c5fd',border:`1px solid ${C.blue}55`,borderRadius:'6px',padding:'5px 10px',fontSize:'11px',fontFamily:'monospace',cursor:'pointer'}} onClick={()=>{setEditId(fe.id);setEditAmount(String(curAmount))}}>✎ Actualizar precio</button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {inactive.length>0&&(
+        <div style={{marginTop:'1.5rem'}}>
+          <button style={{background:'transparent',color:C.textMuted,border:`1px solid ${C.border}`,borderRadius:'6px',padding:'6px 12px',fontSize:'12px',fontFamily:'monospace',cursor:'pointer'}} onClick={()=>setShowInactive(p=>!p)}>
+            {showInactive?'▲':'▼'} Gastos eliminados ({inactive.length})
+          </button>
+          {showInactive&&(
+            <div style={{marginTop:'0.75rem',opacity:0.6}}>
+              {inactive.map(fe=>(
+                <div key={fe.id} style={{...cS,marginBottom:'0.5rem'}}>
+                  <div style={{...rRow,borderBottom:'none'}}>
+                    <div>
+                      <div style={{fontFamily:'monospace',fontSize:'13px',color:C.textMuted,textDecoration:'line-through'}}>{fe.description}</div>
+                      <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace'}}>{monthLabel(fe.createdMonth)} → {monthLabel(fe.deletedMonth)}</div>
+                    </div>
+                    <span style={{fontFamily:'monospace',fontSize:'13px',color:C.textMuted}}>{fe.currency==='pesos'?fmtP(getFixedAmountForMonth(fe,fe.deletedMonth)):fmtD(getFixedAmountForMonth(fe,fe.deletedMonth))}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const btnPrimary={background:`linear-gradient(135deg,${C.amber},${C.amberDim})`,color:'#07090f',border:'none',borderRadius:'8px',padding:'11px 20px',fontSize:'14px',fontFamily:'monospace',fontWeight:700,letterSpacing:'1px',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px',boxShadow:`0 0 18px ${C.amberGlow}`,touchAction:'manipulation'}
 const btnAdd    ={background:`${C.amber}18`,color:C.amberLight,border:`1.5px solid ${C.amber}`,borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontFamily:'monospace',fontWeight:700,letterSpacing:'1px',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px',boxShadow:`0 0 14px ${C.amberGlow}`,touchAction:'manipulation'}
@@ -713,10 +896,12 @@ export default function App(){
   const [histDetail,setHistDetail]= useState(null)
   const [deleteConfirm,setDeleteConfirm]= useState(null)  // report to confirm-delete
   const [deleting,setDeleting]= useState(false)
+  const [fixedExpenses, setFixedExpenses] = useState(()=>LS.get('presup:fixedExpenses')||[])
   const cardId=useRef(5), othId=useRef(2)
 
   // Persist history to LS and state together
   const persist = useCallback(h => { setHistory(h); LS.set('presup:history',h) }, [])
+  const persistFixed = useCallback(fe => { setFixedExpenses(fe); LS.set('presup:fixedExpenses',fe) }, [])
 
   // Called by Drive hook when background sync completes
   const onHistoryLoaded = useCallback(driveReports => {
@@ -745,27 +930,33 @@ export default function App(){
     setErrors(e);return!Object.keys(e).length
   }
 
-  const computeTotals=()=>{
+  const computeTotals=(fixedExps=[])=>{
     const cardP=cards.reduce((a,c)=>a+(parseFloat(c.pesos)||0),0)
     const cardD=cards.reduce((a,c)=>a+(parseFloat(c.dollars)||0),0)
     const rentV=parseFloat(rent)||0
     const othP =others.filter(e=>e.currency==='pesos').reduce((a,e)=>a+(parseFloat(e.amount)||0),0)
     const othD =others.filter(e=>e.currency==='dollars').reduce((a,e)=>a+(parseFloat(e.amount)||0),0)
-    const expP=cardP+rentV+othP, expD=cardD+othD
+    const fixP =fixedExps.filter(e=>e.currency==='pesos').reduce((a,e)=>a+(parseFloat(e.amount)||0),0)
+    const fixD =fixedExps.filter(e=>e.currency==='dollars').reduce((a,e)=>a+(parseFloat(e.amount)||0),0)
+    const expP=cardP+rentV+othP+fixP, expD=cardD+othD+fixD
     const incP=parseFloat(income.pesos)||0, incD=parseFloat(income.dollars)||0
     const balP=incP-expP, balD=incD-expD
     const total=dollarRate?(incP+incD*parseFloat(dollarRate)-expP-expD*parseFloat(dollarRate)):null
     return{expensesPesos:expP,expensesDollars:expD,balancePesos:balP,balanceDollars:balD,totalInPesos:total}
   }
 
-  const buildReport=()=>({
-    month:selMonth, dollarRate:dollarRate||null,
-    income:{pesos:parseFloat(income.pesos)||0, dollars:parseFloat(income.dollars)||0},
-    cards:cards.map(c=>({...c,pesos:parseFloat(c.pesos)||0,dollars:parseFloat(c.dollars)||0})),
-    rent:parseFloat(rent)||0,
-    otherExpenses:others.map(e=>({...e,amount:parseFloat(e.amount)||0})),
-    totals:computeTotals(), savedAt:new Date().toISOString(),
-  })
+  const buildReport=()=>{
+    const activeFixed=getActiveFixed(fixedExpenses,selMonth)
+    return{
+      month:selMonth, dollarRate:dollarRate||null,
+      income:{pesos:parseFloat(income.pesos)||0, dollars:parseFloat(income.dollars)||0},
+      cards:cards.map(c=>({...c,pesos:parseFloat(c.pesos)||0,dollars:parseFloat(c.dollars)||0})),
+      rent:parseFloat(rent)||0,
+      otherExpenses:others.map(e=>({...e,amount:parseFloat(e.amount)||0})),
+      fixedExpenses:activeFixed,
+      totals:computeTotals(activeFixed), savedAt:new Date().toISOString(),
+    }
+  }
 
   // Build CSV content for a report (shared by both save paths)
   const buildReportCSV=(report)=>{
@@ -877,7 +1068,7 @@ export default function App(){
 
       {/* ── TABS ───────────────────────────────────────────────────── */}
       <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:'0.5rem 1rem',display:'flex',gap:'6px'}}>
-        {[{id:'form',l:'Nuevo mes'},{id:'history',l:'Historial'},{id:'analytics',l:'Analítica'}].map(n=>(
+        {[{id:'form',l:'Nuevo mes'},{id:'fixed',l:'Fijos'},{id:'history',l:'Historial'},{id:'analytics',l:'Analítica'}].map(n=>(
           <button key={n.id} style={navBtn(view===n.id)} onClick={()=>{setView(n.id);setHistDetail(null)}}>{n.l}</button>
         ))}
       </div>
@@ -978,6 +1169,16 @@ export default function App(){
                 <div style={{marginTop:'1.25rem',padding:'0.9rem',background:`${C.amber}08`,border:`1px dashed ${C.amber}44`,borderRadius:'8px'}}>
                   <span style={{fontSize:'12px',color:C.textDim,fontFamily:'monospace'}}>Cuando termines, presioná "Finalizar carga".</span>
                 </div>
+                {getActiveFixed(fixedExpenses,selMonth).length>0&&(
+                  <div style={{marginTop:'0.75rem',padding:'0.9rem',background:`${C.teal}08`,border:`1px dashed ${C.teal}44`,borderRadius:'8px'}}>
+                    <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'1px',color:C.teal,marginBottom:'6px'}}>GASTOS FIJOS INCLUIDOS AUTOMÁTICAMENTE</div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:'5px'}}>
+                      {getActiveFixed(fixedExpenses,selMonth).map(e=>(
+                        <span key={e.id} style={{background:`${C.teal}15`,border:`1px solid ${C.teal}33`,borderRadius:'6px',padding:'3px 8px',fontSize:'11px',color:C.teal,fontFamily:'monospace'}}>{e.description}: {e.currency==='pesos'?fmtP(e.amount):fmtD(e.amount)}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -988,9 +1189,19 @@ export default function App(){
                   <span style={{fontSize:'24px',color:C.green}}>✓</span>
                   <div style={{fontFamily:'monospace',color:C.text,fontSize:'14px'}}>{others.filter(e=>e.description||e.amount).length} otros gastos cargados</div>
                 </div>
-                <div style={{display:'flex',flexWrap:'wrap',gap:'5px'}}>
+                <div style={{display:'flex',flexWrap:'wrap',gap:'5px',marginBottom:'0.5rem'}}>
                   {others.filter(e=>e.description||e.amount).map(e=><span key={e.id} style={{background:C.tag,border:`1px solid ${C.border}`,borderRadius:'6px',padding:'3px 8px',fontSize:'11px',color:C.textDim,fontFamily:'monospace'}}>{e.description||'Sin nombre'}: {e.currency==='pesos'?fmtP(e.amount):fmtD(e.amount)}</span>)}
                 </div>
+                {getActiveFixed(fixedExpenses,selMonth).length>0&&(
+                  <>
+                    <div style={{fontSize:'10px',fontFamily:'monospace',color:C.teal,marginBottom:'5px',letterSpacing:'1px'}}>+ GASTOS FIJOS AUTO</div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:'5px'}}>
+                      {getActiveFixed(fixedExpenses,selMonth).map(e=>(
+                        <span key={e.id} style={{background:`${C.teal}15`,border:`1px solid ${C.teal}33`,borderRadius:'6px',padding:'3px 8px',fontSize:'11px',color:C.teal,fontFamily:'monospace'}}>{e.description}: {e.currency==='pesos'?fmtP(e.amount):fmtD(e.amount)}</span>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -1028,6 +1239,11 @@ export default function App(){
               {step===4&&currentReport&&<button style={btnSec} onClick={()=>downloadLocalCSV(currentReport)}>↓ Descargar CSV</button>}
             </div>
           </>
+        )}
+
+        {/* ══ GASTOS FIJOS ═════════════════════════════════════════════ */}
+        {view==='fixed'&&(
+          <FixedExpensesView fixedExpenses={fixedExpenses} onUpdate={persistFixed}/>
         )}
 
         {/* ══ HISTORY ══════════════════════════════════════════════════ */}
