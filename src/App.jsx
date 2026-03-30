@@ -338,11 +338,26 @@ function computeAnalytics(history) {
   const cardTotals={}
   sorted.forEach(h=>h.cards?.forEach(c=>{ const k=`${c.bank||'Sin nombre'} (${c.type?.toUpperCase?.()})`; cardTotals[k]=(cardTotals[k]||0)+(c.pesos||0) }))
   const topCards=Object.entries(cardTotals).sort(([,a],[,b])=>b-a).slice(0,4)
+  // ── Fixed expenses analytics ──────────────────────────────────────────────
+  const lastFixed=last.fixedExpenses||[], prevFixed=prev?.fixedExpenses||[]
+  const lastFixedTotal=lastFixed.filter(e=>e.currency==='pesos').reduce((a,e)=>a+(e.amount||0),0)
+  const prevFixedTotal=prevFixed.filter(e=>e.currency==='pesos').reduce((a,e)=>a+(e.amount||0),0)
+  const fixedGrowth=prev&&prevFixedTotal>0?pct(lastFixedTotal,prevFixedTotal):null
+  const fixedChanges=lastFixed.map(e=>{
+    const prevE=prevFixed.find(p=>p.id===e.id)
+    if(!prevE||prevE.amount===e.amount)return null
+    return{id:e.id,description:e.description,currency:e.currency,prev:prevE.amount,curr:e.amount,delta:pct(e.amount,prevE.amount)}
+  }).filter(Boolean)
+  const fixedTrend=sorted.slice(-6).map(h=>({
+    month:h.month,
+    total:(h.fixedExpenses||[]).filter(e=>e.currency==='pesos').reduce((a,e)=>a+(e.amount||0),0)
+  })).filter(d=>d.total>0)
   return { sorted,last,prev,topItems,trendData,
     expGrowth:prev?pct(lastExp,prev.totals?.expensesPesos||0):null,
     incGrowth:prev?pct(lastInc,prev.income?.pesos||0):null,
     avgExpenses,avgIncome,avgBalance,posMonths,negMonths:sorted.length-posMonths,
-    savingsRate,peakMonth,topCards }
+    savingsRate,peakMonth,topCards,
+    lastFixedTotal,prevFixedTotal,fixedGrowth,fixedChanges,fixedTrend }
 }
 
 // ─── CHARTS ──────────────────────────────────────────────────────────────────
@@ -511,6 +526,84 @@ function AnalyticsView({history,syncStatus}){
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:'12px',padding:'1.25rem',marginBottom:'1.25rem'}}>
           <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.amber,marginBottom:'1rem'}}>// ÚLTIMOS {a.trendData.length} MESES</div>
           <BarChart data={a.trendData}/>
+        </div>
+      )}
+
+      {(a.lastFixedTotal>0||a.fixedChanges?.length>0)&&(
+        <div style={{background:C.card,border:`1px solid ${C.teal}33`,borderRadius:'12px',padding:'1.25rem',marginBottom:'1.25rem'}}>
+          <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.teal,marginBottom:'1rem'}}>// GASTOS FIJOS</div>
+          {/* Totals row */}
+          <div style={{display:'flex',gap:'1rem',flexWrap:'wrap',marginBottom: a.fixedChanges?.length>0||a.fixedTrend?.length>1?'1rem':'0'}}>
+            <div style={{flex:1,minWidth:'120px'}}>
+              <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',marginBottom:'4px'}}>ESTE MES</div>
+              <div style={{fontSize:'20px',fontWeight:700,fontFamily:'monospace',color:C.teal}}>{fmtP(a.lastFixedTotal)}</div>
+            </div>
+            {a.prevFixedTotal>0&&(
+              <div style={{flex:1,minWidth:'120px'}}>
+                <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',marginBottom:'4px'}}>MES ANTERIOR</div>
+                <div style={{fontSize:'20px',fontWeight:700,fontFamily:'monospace',color:C.textDim}}>{fmtP(a.prevFixedTotal)}</div>
+              </div>
+            )}
+            {a.fixedGrowth!=null&&(
+              <div style={{flex:1,minWidth:'120px'}}>
+                <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',marginBottom:'4px'}}>VARIACIÓN</div>
+                <div style={{fontSize:'20px',fontWeight:700,fontFamily:'monospace',color:a.fixedGrowth>0?C.red:C.green}}>
+                  {a.fixedGrowth>0?'↑':'↓'} {sign(a.fixedGrowth)}{a.fixedGrowth.toFixed(1)}%
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Per-expense price changes */}
+          {a.fixedChanges?.length>0&&(
+            <div style={{marginBottom:a.fixedTrend?.length>1?'1rem':'0'}}>
+              <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',marginBottom:'6px',letterSpacing:'1px'}}>CAMBIOS VS MES ANTERIOR</div>
+              {a.fixedChanges.map((ch,i)=>{
+                const up=ch.delta>0
+                const color=up?C.red:C.green
+                return(
+                  <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 0',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',gap:'4px'}}>
+                    <span style={{fontFamily:'monospace',fontSize:'12px',color:C.textDim}}>{ch.description}</span>
+                    <div style={{display:'flex',alignItems:'center',gap:'8px',fontFamily:'monospace',fontSize:'12px'}}>
+                      <span style={{color:C.textMuted}}>{ch.currency==='pesos'?fmtP(ch.prev):fmtD(ch.prev)}</span>
+                      <span style={{color:C.textMuted}}>→</span>
+                      <span style={{color,fontWeight:600}}>{ch.currency==='pesos'?fmtP(ch.curr):fmtD(ch.curr)}</span>
+                      <span style={{color,background:`${color}18`,border:`1px solid ${color}44`,borderRadius:'4px',padding:'1px 6px',fontSize:'10px'}}>{up?'+':''}{ch.delta.toFixed(1)}%</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          {/* Fixed expenses trend mini-chart */}
+          {a.fixedTrend?.length>1&&(
+            <div>
+              <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',marginBottom:'8px',letterSpacing:'1px'}}>EVOLUCIÓN COSTO FIJO</div>
+              {(()=>{
+                const maxF=Math.max(...a.fixedTrend.map(d=>d.total),1)
+                const barH=50
+                return(
+                  <div style={{display:'flex',alignItems:'flex-end',gap:'clamp(3px,1.5vw,8px)',height:barH+28}}>
+                    {a.fixedTrend.map((d,i)=>{
+                      const h=Math.round((d.total/maxF)*barH)
+                      const prev=i>0?a.fixedTrend[i-1].total:d.total
+                      const color=d.total>prev?C.red:d.total<prev?C.green:C.teal
+                      return(
+                        <div key={i} style={{flex:'0 0 auto',minWidth:'32px',display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
+                          <div style={{width:'14px',height:h||2,background:color,borderRadius:'2px 2px 0 0',opacity:0.8}}/>
+                          <div style={{fontSize:'9px',color:C.textMuted,fontFamily:'monospace',textAlign:'center',whiteSpace:'nowrap'}}>{monthShort(d.month)}</div>
+                          <div style={{fontSize:'8px',color,fontFamily:'monospace',textAlign:'center'}}>{fmtK(d.total)}</div>
+                        </div>
+                      )
+                    })}
+                    <div style={{display:'flex',flexDirection:'column',justifyContent:'flex-end',gap:'3px',marginLeft:'6px',paddingBottom:'18px',flex:'0 0 auto'}}>
+                      <div style={{display:'flex',alignItems:'center',gap:'3px'}}><div style={{width:'7px',height:'7px',background:C.green,borderRadius:'2px'}}/><span style={{fontSize:'9px',color:C.textMuted,fontFamily:'monospace'}}>baja</span></div>
+                      <div style={{display:'flex',alignItems:'center',gap:'3px'}}><div style={{width:'7px',height:'7px',background:C.red,borderRadius:'2px'}}/><span style={{fontSize:'9px',color:C.textMuted,fontFamily:'monospace'}}>sube</span></div>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
         </div>
       )}
 
@@ -718,7 +811,8 @@ function FixedExpensesView({fixedExpenses, onUpdate}){
   const [addError,   setAddError]   = useState('')
   const [editId,     setEditId]     = useState(null)
   const [editAmount, setEditAmount] = useState('')
-  const [showInactive, setShowInactive] = useState(false)
+  const [showInactive,  setShowInactive]  = useState(false)
+  const [showHistory,   setShowHistory]   = useState({})
 
   const curMonth = getCurrentMonth()
   const active   = fixedExpenses.filter(fe=>fe.deletedMonth===null||fe.deletedMonth>curMonth)
@@ -806,8 +900,30 @@ function FixedExpensesView({fixedExpenses, onUpdate}){
                 <div style={{fontFamily:'monospace',fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>{fe.description}</div>
                 <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
                   <span style={{fontFamily:'monospace',fontSize:'18px',fontWeight:700,color:C.red}}>{fe.currency==='pesos'?fmtP(curAmount):fmtD(curAmount)}</span>
-                  {fe.priceHistory.length>1&&<span style={{fontSize:'10px',fontFamily:'monospace',color:C.textMuted,background:`${C.teal}15`,border:`1px solid ${C.teal}33`,borderRadius:'4px',padding:'1px 6px'}}>{fe.priceHistory.length} precios</span>}
+                  {fe.priceHistory.length>1&&(
+                    <button style={{fontSize:'10px',fontFamily:'monospace',color:C.teal,background:`${C.teal}15`,border:`1px solid ${C.teal}33`,borderRadius:'4px',padding:'2px 7px',cursor:'pointer'}} onClick={()=>setShowHistory(p=>({...p,[fe.id]:!p[fe.id]}))}>
+                      {fe.priceHistory.length} precios {showHistory[fe.id]?'▲':'▼'}
+                    </button>
+                  )}
                 </div>
+                {showHistory[fe.id]&&(
+                  <div style={{marginTop:'8px',background:C.surface,borderRadius:'6px',padding:'8px 10px'}}>
+                    <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',letterSpacing:'1px',marginBottom:'6px'}}>HISTORIAL DE PRECIOS</div>
+                    {[...fe.priceHistory].reverse().map((ph,i,arr)=>{
+                      const prev=arr[i+1]
+                      const delta=prev?pct(ph.amount,prev.amount):null
+                      return(
+                        <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 0',borderBottom:i<arr.length-1?`1px solid ${C.border}`:'none'}}>
+                          <span style={{fontFamily:'monospace',fontSize:'11px',color:C.textDim}}>{monthLabel(ph.fromMonth)}</span>
+                          <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                            <span style={{fontFamily:'monospace',fontSize:'12px',fontWeight:600,color:i===0?C.text:C.textMuted}}>{fe.currency==='pesos'?fmtP(ph.amount):fmtD(ph.amount)}</span>
+                            {delta!=null&&<span style={{fontSize:'10px',color:delta>0?C.red:C.green,fontFamily:'monospace'}}>{delta>0?'+':''}{delta.toFixed(1)}%</span>}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
                 <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',marginTop:'4px'}}>Desde {monthLabel(fe.createdMonth)}</div>
               </div>
               <button style={{background:'transparent',color:C.red,border:`1px solid ${C.redDim}44`,borderRadius:'6px',padding:'6px 10px',fontSize:'12px',cursor:'pointer',fontFamily:'monospace'}} onClick={()=>handleDelete(fe.id)}>✕ Eliminar</button>
@@ -1208,6 +1324,34 @@ export default function App(){
             {/* ── Step 4 Reporte ──────────────────────────────────── */}
             {step===4&&currentReport&&(
               <>
+                {(()=>{
+                  // Compute fixed price changes vs most recent previous month
+                  const prevReport=history.filter(h=>h.month<currentReport.month).sort((a,b)=>b.month.localeCompare(a.month))[0]
+                  const curFixed=currentReport.fixedExpenses||[]
+                  const prevFixed=prevReport?.fixedExpenses||[]
+                  const changes=curFixed.map(e=>{
+                    const p=prevFixed.find(x=>x.id===e.id)
+                    if(!p||p.amount===e.amount)return null
+                    return{description:e.description,currency:e.currency,prev:p.amount,curr:e.amount,delta:pct(e.amount,p.amount)}
+                  }).filter(Boolean)
+                  if(!changes.length)return null
+                  return(
+                    <div style={{marginBottom:'1rem',padding:'0.9rem 1rem',background:`${C.red}0d`,border:`1px solid ${C.redDim}55`,borderRadius:'10px'}}>
+                      <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.red,marginBottom:'8px'}}>⚠ GASTOS FIJOS CON CAMBIO DE PRECIO</div>
+                      {changes.map((ch,i)=>(
+                        <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:i<changes.length-1?`1px solid ${C.border}`:'none',flexWrap:'wrap',gap:'4px'}}>
+                          <span style={{fontFamily:'monospace',fontSize:'12px',color:C.textDim}}>{ch.description}</span>
+                          <div style={{display:'flex',alignItems:'center',gap:'6px',fontFamily:'monospace',fontSize:'12px'}}>
+                            <span style={{color:C.textMuted}}>{ch.currency==='pesos'?fmtP(ch.prev):fmtD(ch.prev)}</span>
+                            <span style={{color:C.textMuted}}>→</span>
+                            <span style={{color:ch.delta>0?C.red:C.green,fontWeight:600}}>{ch.currency==='pesos'?fmtP(ch.curr):fmtD(ch.curr)}</span>
+                            <span style={{fontSize:'10px',color:ch.delta>0?C.red:C.green,background:`${ch.delta>0?C.red:C.green}18`,border:`1px solid ${ch.delta>0?C.redDim:C.greenDim}55`,borderRadius:'4px',padding:'1px 6px'}}>{ch.delta>0?'+':''}{ch.delta.toFixed(1)}%</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
                 <ReportView report={currentReport}/>
                 {/* Drive auto-save status */}
                 {drive.status==='connected'&&(
