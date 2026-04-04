@@ -1,6 +1,90 @@
 # ◈ PRESUP — Tracker de Gastos Mensuales
 
-App personal de seguimiento de gastos con soporte para pesos y dólares, analítica histórica y guardado en Google Drive.
+App personal de seguimiento de gastos con soporte para pesos y dólares, analítica histórica y sincronización con Google Drive.
+
+---
+
+## ✦ Funcionalidades
+
+| Módulo | Descripción |
+|--------|-------------|
+| **Nuevo mes** | Wizard de 4 pasos: ingresos → tarjetas → alquiler → otros gastos |
+| **Copiar último mes** | Pre-carga el formulario con los valores del mes anterior |
+| **Notas por gasto** | Campo opcional de nota libre en cada gasto individual |
+| **Presupuesto mensual** | Límite de gastos con barra de progreso y alerta de desvío |
+| **Gastos fijos** | Alta y seguimiento de recurrentes con historial de precios |
+| **Historial** | Archivo de meses anteriores con detalle y descarga CSV |
+| **Exportar todo** | Descarga todo el historial en un único CSV consolidado |
+| **Analítica** | Dashboard con tendencias, promedios, tasa de ahorro y top gastos |
+| **Año vs año** | Comparativa del mes actual contra el mismo mes del año anterior |
+| **Google Drive** | Sync automático de CSV por mes, carga y descarga desde la nube |
+
+### Detalles
+- Soporte completo para **pesos y dólares** con tipo de cambio opcional
+- **Gastos fijos automáticos** — se incluyen solos en cada nuevo mes desde que fueron dados de alta
+- **Historial de precios** en gastos fijos con delta % respecto al mes anterior
+- Gráfico de barras de 6 meses (ingresos vs gastos) y gráfico de torta con top 6 categorías
+- Persistencia local en `localStorage` + backup en Google Drive
+- **CSV legible + JSON embebido** — editable en Excel sin romper la importación
+
+---
+
+## 🏗️ Arquitectura
+
+```
+src/
+├── constants.js              # Paleta, config, estilos compartidos, STEPS
+├── utils.js                  # Helpers, LS, CSV, analytics engine
+├── hooks/
+│   └── useDrive.js           # Google Drive OAuth + API hook
+├── components/
+│   ├── BarChart.jsx          # Gráfico de barras SVG (6 meses)
+│   ├── DonutChart.jsx        # Gráfico de torta SVG (top gastos)
+│   ├── DriveButton.jsx       # Estado y acción de conexión con Drive
+│   ├── ConfirmDialog.jsx     # Modal de confirmación de borrado
+│   ├── ReportView.jsx        # Detalle de reporte mensual + presupuesto
+│   ├── FixedExpensesView.jsx # ABM de gastos fijos
+│   └── AnalyticsView.jsx     # Dashboard con YoY, presupuesto y fijos
+├── App.jsx                   # Routing, wizard del formulario, orquestación
+└── main.jsx                  # Entry point React
+
+index.html                    # Carga Google Identity Services y Drive API
+vite.config.js                # Configuración Vite + React
+.env.example                  # Variables de entorno requeridas
+```
+
+### Stack
+
+| Capa | Tecnología |
+|------|-----------|
+| UI | React 18 |
+| Build | Vite 5 |
+| Estilos | CSS-in-JS inline (sin framework) |
+| Auth | Google Identity Services (OAuth 2.0) |
+| Storage | localStorage + Google Drive API v3 |
+| Deploy | Vercel |
+
+### Persistencia
+
+**localStorage:**
+- `presup:history` — array de reportes mensuales
+- `presup:fixedExpenses` — array de gastos fijos con historial de precios
+- `presup:budget` — límite de presupuesto mensual en pesos
+
+**Google Drive:**
+- Un archivo por mes: `presupuesto_YYYY-MM.csv`
+- Carpeta fija configurada en `constants.js`
+- Scope limitado: `drive.file` (solo archivos creados por la app)
+
+**Formato CSV:**
+```
+# sección legible (compatible con Excel/Sheets)
+...tabla de datos...
+
+##PRESUP_DATA##
+{ ...JSON completo del reporte... }
+##PRESUP_DATA##
+```
 
 ---
 
@@ -8,11 +92,7 @@ App personal de seguimiento de gastos con soporte para pesos y dólares, analít
 
 ### PASO 1 — Subir a GitHub
 
-1. Creá un repositorio nuevo en github.com (ej: `presup`)
-2. Desde tu terminal (o GitHub Desktop), ejecutá:
-
 ```bash
-cd ruta/a/esta/carpeta
 git init
 git add .
 git commit -m "Initial commit"
@@ -25,77 +105,50 @@ git push -u origin main
 
 ### PASO 2 — Deploy en Vercel (gratis)
 
-1. Entrá a **vercel.com** e iniciá sesión con tu cuenta de GitHub
-2. Click en **"Add New Project"**
-3. Buscá tu repo `presup` y hacé click en **"Import"**
-4. Vercel detecta Vite automáticamente — no toques nada
-5. Click en **"Deploy"** y esperá ~1 minuto
-6. ✅ Tu app queda en una URL del tipo `https://presup-xxx.vercel.app`
+1. Entrá a **vercel.com** e iniciá sesión con GitHub
+2. Click en **"Add New Project"** → importá tu repo
+3. Vercel detecta Vite automáticamente — no toques nada
+4. Click en **"Deploy"**
 
-> La app ya funciona en este punto. El siguiente paso es opcional pero necesario para que los CSV se guarden en Google Drive.
+> La app ya funciona. El paso siguiente es opcional pero necesario para guardar en Drive.
 
 ---
 
-### PASO 3 — Configurar Google Drive (para guardar CSV en la nube)
+### PASO 3 — Configurar Google Drive
 
 #### 3a. Crear proyecto en Google Cloud Console
 
 1. Andá a [console.cloud.google.com](https://console.cloud.google.com)
-2. Click en el selector de proyectos (arriba a la izquierda) → **"Nuevo proyecto"**
-3. Nombre: `presup` → **Crear**
-4. Asegurate de tener el proyecto `presup` seleccionado
+2. Selector de proyectos → **"Nuevo proyecto"** → nombre: `presup`
 
 #### 3b. Habilitar la API de Google Drive
 
-1. En el menú lateral: **APIs y Servicios → Biblioteca**
-2. Buscá **"Google Drive API"**
-3. Click en **"Habilitar"**
+1. **APIs y Servicios → Biblioteca**
+2. Buscá **"Google Drive API"** → **Habilitar**
 
 #### 3c. Crear pantalla de consentimiento OAuth
 
 1. **APIs y Servicios → Pantalla de consentimiento de OAuth**
 2. Tipo de usuario: **Externo** → Crear
-3. Completá:
-   - Nombre de la app: `PRESUP`
-   - Email de asistencia: tu email
-   - Email del desarrollador: tu email
-4. Click en **Guardar y continuar** (saltá los demás pasos opcionales)
-5. En **"Usuarios de prueba"**: agregá tu email de Gmail
+3. Completá nombre de la app y emails
+4. En **"Usuarios de prueba"**: agregá tu email de Gmail
 
 #### 3d. Crear credenciales OAuth
 
-1. **APIs y Servicios → Credenciales**
-2. Click en **"+ Crear credenciales" → "ID de cliente OAuth"**
-3. Tipo de aplicación: **Aplicación web**
-4. Nombre: `presup-web`
-5. En **"Orígenes de JavaScript autorizados"**, agregá:
+1. **APIs y Servicios → Credenciales → + Crear credenciales → ID de cliente OAuth**
+2. Tipo: **Aplicación web** / Nombre: `presup-web`
+3. En **"Orígenes de JavaScript autorizados"** agregá:
    ```
    https://presup-xxx.vercel.app
-   ```
-   *(reemplazá con tu URL real de Vercel)*
-   
-   También podés agregar para desarrollo local:
-   ```
    http://localhost:5173
    ```
-6. Click en **Crear**
-7. 📋 **Copiá el "ID de cliente"** — es algo como `123456789-abc.apps.googleusercontent.com`
+4. Copiá el **"ID de cliente"** generado
 
 #### 3e. Agregar el Client ID en Vercel
 
-1. En tu proyecto de Vercel → **Settings → Environment Variables**
-2. Agregá:
-   - **Name:** `VITE_GOOGLE_CLIENT_ID`
-   - **Value:** el ID de cliente que copiaste
-3. Click en **Save**
-4. **Importante:** Redesployá tu proyecto (Settings → Deployments → Redeploy)
-
----
-
-## ✅ Listo
-
-Ahora en la app aparece el botón **"↑ Conectar Drive"** en el header.
-Al presionarlo, Google pide permiso una sola vez y los CSVs se guardan automáticamente en tu carpeta de Drive.
+1. Tu proyecto en Vercel → **Settings → Environment Variables**
+2. Agregá `VITE_GOOGLE_CLIENT_ID` con el ID copiado
+3. **Redeploy** el proyecto
 
 ---
 
@@ -104,23 +157,8 @@ Al presionarlo, Google pide permiso una sola vez y los CSVs se guardan automáti
 ```bash
 npm install
 cp .env.example .env
-# editá .env y ponés tu Client ID
+# editá .env con tu Client ID
 npm run dev
 ```
 
 Abrí [http://localhost:5173](http://localhost:5173)
-
----
-
-## 📁 Estructura
-
-```
-presup/
-├── src/
-│   ├── App.jsx        # App completa
-│   └── main.jsx       # Entry point React
-├── index.html
-├── vite.config.js
-├── package.json
-└── .env.example
-```
