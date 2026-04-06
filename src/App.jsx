@@ -5,6 +5,7 @@ import {
   getCurrentMonth, monthLabel, getActiveFixed,
   fmtP, fmtD, pct,
 } from './utils'
+import { validateCards, filterCards, mapCardsFromReport, mapOthersFromReport } from './logic'
 import { useDrive }          from './hooks/useDrive'
 import DriveButton           from './components/DriveButton'
 import ReportView            from './components/ReportView'
@@ -58,7 +59,7 @@ export default function App() {
 
   // ── Form helpers ─────────────────────────────────────────────────────────────
   const addCard  = () => setCards(p => [...p, {id:cardId.current++, bank:'', type:'visa', pesos:'', dollars:''}])
-  const rmCard   = id => cards.length > 1 && setCards(p => p.filter(c => c.id !== id))
+  const rmCard   = id => setCards(p => p.filter(c => c.id !== id))
   const updCard  = (id, f, v) => { if ((f==='pesos'||f==='dollars') && v !== '' && parseFloat(v) < 0) return; setCards(p => p.map(c => c.id===id ? {...c,[f]:v} : c)) }
   const addOther = () => setOthers(p => [...p, {id:othId.current++, description:'', amount:'', currency:'pesos', notes:''}])
   const rmOther  = id => setOthers(p => p.filter(e => e.id !== id))
@@ -87,6 +88,30 @@ export default function App() {
     othId.current = newOthers.length + 1
   }
 
+  // ── Load existing month into form ────────────────────────────────────────────
+  const loadFromReport = (report) => {
+    setSelMonth(report.month)
+    setIncome({
+      pesos:   report.income?.pesos   > 0 ? String(report.income.pesos)   : '',
+      dollars: report.income?.dollars > 0 ? String(report.income.dollars) : '',
+    })
+    setDollarRate(report.dollarRate ? String(report.dollarRate) : '')
+    const newCards = mapCardsFromReport(report.cards)
+    setCards(newCards.length ? newCards : [{id:1,bank:'',type:'visa',pesos:'',dollars:''}])
+    cardId.current = newCards.length + 1
+    setRent(report.rent > 0 ? String(report.rent) : '')
+    const newOthers = mapOthersFromReport(report.otherExpenses)
+    setOthers(newOthers.length ? newOthers : [{id:1,description:'',amount:'',currency:'pesos',notes:''}])
+    othId.current = newOthers.length + 1
+    setStep(0)
+    setFinalized(false)
+    setErrors({})
+    setNoteOpen({})
+    setSaveMsg(null)
+    setView('form')
+    setHistDetail(null)
+  }
+
   // ── Validation ───────────────────────────────────────────────────────────────
   const validate = () => {
     const e = {}
@@ -95,7 +120,7 @@ export default function App() {
       if (income.pesos   && parseFloat(income.pesos)   < 0) e.incP = 'No puede ser negativo'
       if (income.dollars && parseFloat(income.dollars) < 0) e.incD = 'No puede ser negativo'
     }
-    if (step === 1) cards.forEach(c => { if (!c.bank.trim()) e[`b${c.id}`] = 'Nombre requerido' })
+    if (step === 1) Object.assign(e, validateCards(cards))
     if (step === 2 && rent !== '' && parseFloat(rent) < 0) e.rent = 'No puede ser negativo'
     setErrors(e)
     return !Object.keys(e).length
@@ -127,7 +152,7 @@ export default function App() {
       dollarRate:    dollarRate || null,
       budget:        budget ? parseFloat(budget) : null,
       income:        {pesos: parseFloat(income.pesos)||0, dollars: parseFloat(income.dollars)||0},
-      cards:         cards.map(c => ({...c, pesos:parseFloat(c.pesos)||0, dollars:parseFloat(c.dollars)||0})),
+      cards:         filterCards(cards),
       rent:          parseFloat(rent) || 0,
       otherExpenses: others.map(e => ({...e, amount:parseFloat(e.amount)||0})),
       fixedExpenses: activeFixed,
@@ -296,6 +321,24 @@ export default function App() {
               </div>
             </div>
 
+            {/* Banner: mes ya guardado */}
+            {step === 0 && (() => {
+              const existing = history.find(h => h.month === selMonth)
+              if (!existing) return null
+              return (
+                <div style={{marginBottom:'1.25rem',padding:'0.9rem 1rem',background:`${C.amber}0d`,border:`1px solid ${C.amber}55`,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px',flexWrap:'wrap'}}>
+                  <div>
+                    <div style={{fontSize:'11px',fontFamily:'monospace',letterSpacing:'1px',color:C.amber,marginBottom:'3px'}}>MES YA REGISTRADO</div>
+                    <div style={{fontSize:'12px',color:C.textDim,fontFamily:'monospace'}}>Ya existe un registro para {monthLabel(selMonth)}. Podés cargarlo y seguir editando.</div>
+                  </div>
+                  <button
+                    style={{background:`${C.amber}22`,color:C.amber,border:`1px solid ${C.amber}66`,borderRadius:'8px',padding:'8px 14px',fontSize:'12px',fontFamily:'monospace',cursor:'pointer',whiteSpace:'nowrap',flexShrink:0}}
+                    onClick={() => loadFromReport(existing)}
+                  >✎ Cargar y editar</button>
+                </div>
+              )
+            })()}
+
             {/* Steps indicator */}
             <div style={{display:'flex',marginBottom:'1.5rem',background:C.surface,border:`1px solid ${C.border}`,borderRadius:'10px',overflow:'hidden'}}>
               {STEPS.map((st, i) => (
@@ -347,6 +390,11 @@ export default function App() {
                   <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.amber}}>// TARJETAS</div>
                   <button className="add-btn" style={btnAdd} onClick={addCard}>＋ Agregar</button>
                 </div>
+                {cards.length === 0 && (
+                  <div style={{padding:'1.5rem',textAlign:'center',color:C.textMuted,fontFamily:'monospace',fontSize:'12px',border:`1px dashed ${C.border}`,borderRadius:'8px'}}>
+                    Sin tarjetas — presioná "＋ Agregar" si tenés gastos de tarjeta este mes
+                  </div>
+                )}
                 {cards.map((c, idx) => (
                   <div key={c.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'0.9rem',marginBottom:'0.6rem'}}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.6rem'}}>
@@ -354,7 +402,7 @@ export default function App() {
                         <span style={{fontSize:'11px',color:C.textMuted,fontFamily:'monospace'}}>#{idx+1}</span>
                         <span style={{display:'inline-block',background:c.type==='visa'?'#1a2a4e':'#2a1a3e',color:c.type==='visa'?'#60a5fa':'#c084fc',border:`1px solid ${c.type==='visa'?'#2a3a6e':'#4a2a6e'}`,borderRadius:'4px',padding:'2px 7px',fontSize:'10px',fontFamily:'monospace'}}>{c.type?.toUpperCase?.()}</span>
                       </div>
-                      {cards.length > 1 && <button className="del-btn" style={btnDanger} onClick={() => rmCard(c.id)}>✕</button>}
+                      <button className="del-btn" style={btnDanger} onClick={() => rmCard(c.id)}>✕</button>
                     </div>
                     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.6rem',marginBottom:'0.6rem'}}>
                       <div>
@@ -612,6 +660,10 @@ export default function App() {
                           <div style={{fontFamily:'monospace',fontSize:'18px',fontWeight:700,color:bal>=0?C.green:C.red}}>{bal<0?'-':''}{fmtP(Math.abs(bal))}</div>
                         </div>
                         <button
+                          onClick={ev => { ev.stopPropagation(); loadFromReport(h) }}
+                          style={{background:`${C.amber}15`,color:C.amber,border:`1px solid ${C.amber}44`,borderRadius:'6px',padding:'4px 10px',fontSize:'11px',fontFamily:'monospace',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'4px',touchAction:'manipulation'}}
+                        >✎ Editar</button>
+                        <button
                           onClick={ev => { ev.stopPropagation(); setDeleteConfirm(h) }}
                           style={{background:'transparent',color:C.red,border:`1px solid ${C.redDim}55`,borderRadius:'6px',padding:'4px 10px',fontSize:'11px',fontFamily:'monospace',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'4px',touchAction:'manipulation'}}
                         >✕ Borrar</button>
@@ -626,6 +678,10 @@ export default function App() {
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1.25rem',flexWrap:'wrap',gap:'8px'}}>
                 <button style={btnSec} onClick={() => setHistDetail(null)}>← Volver</button>
                 <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+                  <button
+                    style={{background:`${C.amber}22`,color:C.amber,border:`1px solid ${C.amber}66`,borderRadius:'8px',padding:'10px 14px',fontSize:'13px',fontFamily:'monospace',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px'}}
+                    onClick={() => loadFromReport(histDetail)}
+                  >✎ Editar mes</button>
                   <button style={btnSec} onClick={() => downloadLocalCSV(histDetail)}>↓ Descargar CSV</button>
                   {drive.status === 'connected' && (
                     <button style={btnPrimary} onClick={() => saveToDrive(histDetail)}>↑ Drive</button>
