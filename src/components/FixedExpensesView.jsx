@@ -2,14 +2,16 @@ import { useState } from 'react'
 import { C, btnAdd } from '../constants'
 import { getCurrentMonth, monthLabel, getFixedAmountForMonth, fmtP, fmtD, pct } from '../utils'
 
-export default function FixedExpensesView({ fixedExpenses, onUpdate }) {
-  const [showAdd,     setShowAdd]     = useState(false)
-  const [addForm,     setAddForm]     = useState({description:'',amount:'',currency:'pesos'})
-  const [addError,    setAddError]    = useState('')
-  const [editId,      setEditId]      = useState(null)
-  const [editAmount,  setEditAmount]  = useState('')
-  const [showInactive, setShowInactive] = useState(false)
-  const [showHistory,  setShowHistory]  = useState({})
+export default function FixedExpensesView({ fixedExpenses, onUpdate, history = [] }) {
+  const [showAdd,       setShowAdd]       = useState(false)
+  const [addForm,       setAddForm]       = useState({description:'',amount:'',currency:'pesos'})
+  const [addError,      setAddError]      = useState('')
+  const [editId,        setEditId]        = useState(null)
+  const [editAmount,    setEditAmount]    = useState('')
+  const [showInactive,  setShowInactive]  = useState(false)
+  const [showHistory,   setShowHistory]   = useState({})
+  const [showImport,    setShowImport]    = useState(false)
+  const [importSel,     setImportSel]     = useState({})   // { key: bool } — undefined = true
 
   const curMonth = getCurrentMonth()
   const active   = fixedExpenses.filter(fe => fe.deletedMonth === null || fe.deletedMonth > curMonth)
@@ -20,6 +22,53 @@ export default function FixedExpensesView({ fixedExpenses, onUpdate }) {
   const inp  = {background:'#0f1623',border:`1px solid ${C.borderLight}`,borderRadius:'8px',color:C.text,padding:'12px 14px',fontSize:'16px',fontFamily:'monospace',width:'100%',boxSizing:'border-box',outline:'none',WebkitAppearance:'none'}
   const sel  = {background:'#0f1623',border:`1px solid ${C.borderLight}`,borderRadius:'8px',color:C.text,padding:'12px 14px',fontSize:'16px',fontFamily:'monospace',width:'100%',boxSizing:'border-box',outline:'none',cursor:'pointer',WebkitAppearance:'none'}
 
+  // ── Gastos fijos importables desde historial ──────────────────────────────
+  // Toma el valor más reciente por cada (description, currency) del historial.
+  // Excluye los que ya existen en la lista global (activos o inactivos).
+  const importable = (() => {
+    const sorted = [...history].sort((a, b) => a.month.localeCompare(b.month))
+    const map = {}
+    sorted.forEach(r => {
+      r.fixedExpenses?.forEach(e => {
+        if (!e.description) return
+        const key = `${e.description.toLowerCase()}||${e.currency}`
+        map[key] = { description: e.description, currency: e.currency, amount: e.amount, fromMonth: r.month }
+      })
+    })
+    return Object.values(map).filter(item =>
+      !fixedExpenses.some(fe =>
+        fe.description.toLowerCase() === item.description.toLowerCase() &&
+        fe.currency === item.currency
+      )
+    )
+  })()
+
+  const itemKey  = item => `${item.description.toLowerCase()}||${item.currency}`
+  const isSelec  = item => importSel[itemKey(item)] !== false
+  const selCount = importable.filter(isSelec).length
+
+  const toggleSel = item => {
+    const k = itemKey(item)
+    setImportSel(prev => ({ ...prev, [k]: !(prev[k] ?? true) }))
+  }
+
+  const handleImport = () => {
+    const toImport = importable.filter(isSelec)
+    if (!toImport.length) return
+    const newFixed = toImport.map((item, i) => ({
+      id:           Date.now() + i,
+      description:  item.description,
+      currency:     item.currency,
+      createdMonth: item.fromMonth,
+      deletedMonth: null,
+      priceHistory: [{ fromMonth: item.fromMonth, amount: item.amount }],
+    }))
+    onUpdate([...fixedExpenses, ...newFixed])
+    setShowImport(false)
+    setImportSel({})
+  }
+
+  // ── CRUD ──────────────────────────────────────────────────────────────────
   const handleAdd = () => {
     if (!addForm.description.trim())              { setAddError('Ingresá una descripción'); return }
     if (!addForm.amount || parseFloat(addForm.amount) <= 0) { setAddError('Ingresá un monto válido'); return }
@@ -54,16 +103,79 @@ export default function FixedExpensesView({ fixedExpenses, onUpdate }) {
 
   return (
     <>
+      {/* ── Header ──────────────────────────────────────────────────── */}
       <div style={{marginBottom:'1.5rem',display:'flex',justifyContent:'space-between',alignItems:'flex-end',flexWrap:'wrap',gap:'8px'}}>
         <div>
           <div style={{fontSize:'20px',fontWeight:700,fontFamily:"'IBM Plex Mono',monospace"}}>Gastos Fijos</div>
           <div style={{fontSize:'11px',color:C.textMuted,fontFamily:'monospace',letterSpacing:'1px',marginTop:'4px'}}>{active.length} activo{active.length !== 1 ? 's' : ''}</div>
         </div>
-        {!showAdd && (
-          <button className="add-btn" style={btnAdd} onClick={() => setShowAdd(true)}>＋ Agregar</button>
-        )}
+        <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+          {importable.length > 0 && !showImport && (
+            <button
+              style={{background:`${C.teal}18`,color:C.teal,border:`1px solid ${C.teal}55`,borderRadius:'8px',padding:'8px 14px',fontSize:'12px',fontFamily:'monospace',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'5px'}}
+              onClick={() => setShowImport(true)}
+            >
+              ↓ Importar desde historial ({importable.length})
+            </button>
+          )}
+          {!showAdd && (
+            <button className="add-btn" style={btnAdd} onClick={() => setShowAdd(true)}>＋ Agregar</button>
+          )}
+        </div>
       </div>
 
+      {/* ── Panel importar desde historial ──────────────────────────── */}
+      {showImport && importable.length > 0 && (
+        <div style={{background:'#0d1e2a',border:`1px solid ${C.teal}55`,borderRadius:'12px',padding:'1.25rem',marginBottom:'1.25rem'}}>
+          <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.teal,marginBottom:'0.75rem'}}>// IMPORTAR DESDE HISTORIAL</div>
+          <div style={{fontSize:'12px',color:C.textMuted,fontFamily:'monospace',marginBottom:'1rem'}}>
+            Se encontraron {importable.length} gastos fijos en reportes guardados que no están en la lista activa. Seleccioná los que querés importar.
+          </div>
+          {importable.map((item, i) => {
+            const key = itemKey(item)
+            const selected = isSelec(item)
+            return (
+              <div
+                key={i}
+                onClick={() => toggleSel(item)}
+                style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'9px 10px',marginBottom:'5px',background:selected?`${C.teal}10`:C.surface,border:`1px solid ${selected?C.teal+'44':C.border}`,borderRadius:'8px',cursor:'pointer',transition:'background 0.15s,border-color 0.15s'}}
+              >
+                <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                  <div style={{width:'16px',height:'16px',borderRadius:'4px',border:`2px solid ${selected?C.teal:C.borderLight}`,background:selected?C.teal:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    {selected && <span style={{color:'#07090f',fontSize:'11px',fontWeight:700,lineHeight:1}}>✓</span>}
+                  </div>
+                  <div>
+                    <div style={{fontFamily:'monospace',fontSize:'13px',color:C.text}}>{item.description}</div>
+                    <div style={{fontFamily:'monospace',fontSize:'10px',color:C.textMuted,marginTop:'2px'}}>
+                      Encontrado en {monthLabel(item.fromMonth)}
+                    </div>
+                  </div>
+                </div>
+                <span style={{fontFamily:'monospace',fontSize:'14px',fontWeight:600,color:C.teal}}>
+                  {item.currency === 'pesos' ? fmtP(item.amount) : fmtD(item.amount)}
+                </span>
+              </div>
+            )
+          })}
+          <div style={{display:'flex',gap:'8px',marginTop:'1rem'}}>
+            <button
+              disabled={selCount === 0}
+              onClick={handleImport}
+              style={{background:selCount>0?`linear-gradient(135deg,${C.teal},#1a9e8e)`:`${C.teal}33`,color:selCount>0?'#07090f':C.textMuted,border:'none',borderRadius:'8px',padding:'10px 18px',fontSize:'13px',fontFamily:'monospace',fontWeight:700,cursor:selCount>0?'pointer':'default'}}
+            >
+              ✓ Importar {selCount > 0 ? `${selCount} fijo${selCount > 1 ? 's' : ''}` : '(ninguno seleccionado)'}
+            </button>
+            <button
+              onClick={() => { setShowImport(false); setImportSel({}) }}
+              style={{background:'transparent',color:C.textDim,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 14px',fontSize:'13px',fontFamily:'monospace',cursor:'pointer'}}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Form agregar ────────────────────────────────────────────── */}
       {showAdd && (
         <div style={{background:'#131b2a',border:`1px solid ${C.amber}55`,borderRadius:'12px',padding:'1.25rem',marginBottom:'1.25rem'}}>
           <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.amber,marginBottom:'1rem'}}>// NUEVO GASTO FIJO</div>
@@ -97,7 +209,8 @@ export default function FixedExpensesView({ fixedExpenses, onUpdate }) {
         </div>
       )}
 
-      {active.length === 0 && !showAdd && (
+      {/* ── Empty state ──────────────────────────────────────────────── */}
+      {active.length === 0 && !showAdd && !showImport && (
         <div style={{textAlign:'center',padding:'3rem 1rem',color:C.textMuted,fontFamily:'monospace'}}>
           <div style={{fontSize:'36px',marginBottom:'1rem',opacity:0.3}}>◈</div>
           <div>Sin gastos fijos configurados</div>
@@ -105,6 +218,7 @@ export default function FixedExpensesView({ fixedExpenses, onUpdate }) {
         </div>
       )}
 
+      {/* ── Lista activos ────────────────────────────────────────────── */}
       {active.map(fe => {
         const curAmount = getFixedAmountForMonth(fe, curMonth)
         const isEditing = editId === fe.id
@@ -165,6 +279,7 @@ export default function FixedExpensesView({ fixedExpenses, onUpdate }) {
         )
       })}
 
+      {/* ── Inactivos ────────────────────────────────────────────────── */}
       {inactive.length > 0 && (
         <div style={{marginTop:'1.5rem'}}>
           <button style={{background:'transparent',color:C.textMuted,border:`1px solid ${C.border}`,borderRadius:'6px',padding:'6px 12px',fontSize:'12px',fontFamily:'monospace',cursor:'pointer'}}

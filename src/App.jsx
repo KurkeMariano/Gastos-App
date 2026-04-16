@@ -616,7 +616,7 @@ export default function App() {
 
         {/* ══ GASTOS FIJOS ═══════════════════════════════════════════════ */}
         {view === 'fixed' && (
-          <FixedExpensesView fixedExpenses={fixedExpenses} onUpdate={persistFixed}/>
+          <FixedExpensesView fixedExpenses={fixedExpenses} onUpdate={persistFixed} history={history}/>
         )}
 
         {/* ══ HISTORY ════════════════════════════════════════════════════ */}
