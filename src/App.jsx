@@ -5,7 +5,7 @@ import {
   getCurrentMonth, monthLabel, getActiveFixed,
   fmtP, fmtD, pct,
 } from './utils'
-import { buildXLSX, buildHistoryXLSX, workbookToBlob } from './buildXLSX'
+import { buildXLSX, buildHistoryXLSX, workbookToBlob, importXLSX } from './buildXLSX'
 import { validateCards, filterCards, mapCardsFromReport, mapOthersFromReport } from './logic'
 import { useDrive }          from './hooks/useDrive'
 import DriveButton           from './components/DriveButton'
@@ -41,7 +41,9 @@ export default function App() {
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [deleting,      setDeleting]      = useState(false)
   const [noteOpen,      setNoteOpen]      = useState({})   // {[otherId]: bool}
+  const [importError,   setImportError]   = useState(null)
   const cardId = useRef(5), othId = useRef(2)
+  const importFileRef = useRef(null)
 
   // ── Persistence helpers ──────────────────────────────────────────────────────
   const persist      = useCallback(h  => { setHistory(h);        LS.set('presup:history', h)             }, [])
@@ -91,7 +93,7 @@ export default function App() {
 
   // ── Load existing month into form ────────────────────────────────────────────
   const loadFromReport = (report) => {
-    setSelMonth(report.month)
+    setSelMonth(report.month || getCurrentMonth())
     setIncome({
       pesos:   report.income?.pesos   > 0 ? String(report.income.pesos)   : '',
       dollars: report.income?.dollars > 0 ? String(report.income.dollars) : '',
@@ -111,6 +113,27 @@ export default function App() {
     setSaveMsg(null)
     setView('form')
     setHistDetail(null)
+  }
+
+  // ── Import XLSX ──────────────────────────────────────────────────────────────
+  const handleImportFile = async (e) => {
+    const file = e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const buf    = await file.arrayBuffer()
+      const result = importXLSX(buf)
+      if (!result) { setImportError('No se pudo leer el archivo. Verificá que sea un Excel de presupuesto válido.'); return }
+      setImportError(null)
+      const { report, fixedFromFile } = result
+      loadFromReport(report)
+      if (fixedFromFile?.length) {
+        // surfaced as a note below the import button — handled in render
+        setImportError({ type: 'info', fixedFromFile })
+      }
+    } catch (err) {
+      setImportError('Error al leer el archivo: ' + err.message)
+    }
   }
 
   // ── Validation ───────────────────────────────────────────────────────────────
@@ -316,9 +339,40 @@ export default function App() {
                     ⤵ Copiar último mes
                   </button>
                 )}
+                {step === 0 && (
+                  <>
+                    <button
+                      style={{background:`${C.teal}18`,color:C.teal,border:`1px solid ${C.teal}55`,borderRadius:'8px',padding:'7px 12px',fontSize:'12px',fontFamily:'monospace',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'5px'}}
+                      onClick={() => importFileRef.current.click()}
+                      title="Importar archivo Excel de presupuesto"
+                    >
+                      ↑ Importar Excel
+                    </button>
+                    <input type="file" accept=".xlsx" ref={importFileRef} style={{display:'none'}} onChange={handleImportFile}/>
+                  </>
+                )}
                 <input type="month" value={selMonth} onChange={e => setSelMonth(e.target.value)} style={{...inp, width:'160px', fontSize:'14px', padding:'8px 10px'}}/>
               </div>
             </div>
+
+            {/* Banner: import result */}
+            {importError && typeof importError === 'string' && (
+              <div style={{marginBottom:'1.25rem',padding:'0.9rem 1rem',background:`${C.red}0d`,border:`1px solid ${C.redDim}55`,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
+                <div style={{fontSize:'12px',color:C.red,fontFamily:'monospace'}}>{importError}</div>
+                <button onClick={() => setImportError(null)} style={{background:'transparent',border:'none',color:C.red,cursor:'pointer',fontSize:'16px',lineHeight:1,padding:'0 4px'}}>×</button>
+              </div>
+            )}
+            {importError?.type === 'info' && (
+              <div style={{marginBottom:'1.25rem',padding:'0.9rem 1rem',background:`${C.teal}0d`,border:`1px solid ${C.teal}44`,borderRadius:'10px',display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'12px'}}>
+                <div>
+                  <div style={{fontSize:'11px',fontFamily:'monospace',letterSpacing:'1px',color:C.teal,marginBottom:'4px'}}>ARCHIVO IMPORTADO</div>
+                  <div style={{fontSize:'12px',color:C.textDim,fontFamily:'monospace'}}>
+                    Se encontraron {importError.fixedFromFile.length} gasto{importError.fixedFromFile.length!==1?'s':''} fijo{importError.fixedFromFile.length!==1?'s':''} en el archivo ({importError.fixedFromFile.map(e=>e.description).filter(Boolean).join(', ')}). Los gastos fijos se gestionan globalmente desde la tab <strong>Fijos</strong> y se incluyen automáticamente por mes.
+                  </div>
+                </div>
+                <button onClick={() => setImportError(null)} style={{background:'transparent',border:'none',color:C.teal,cursor:'pointer',fontSize:'16px',lineHeight:1,padding:'0 4px',flexShrink:0}}>×</button>
+              </div>
+            )}
 
             {/* Banner: mes ya guardado */}
             {step === 0 && (() => {

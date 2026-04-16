@@ -183,3 +183,108 @@ export function parseReportFromXLSX(arrayBuffer) {
     return null
   }
 }
+
+// ─── IMPORT FROM XLSX (manual import) ────────────────────────────────────────
+const MONTHS_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
+
+function parseMonthLabel(label) {
+  const parts = String(label || '').trim().split(/\s+/)
+  if (parts.length < 2) return null
+  const mIdx = MONTHS_ES.indexOf(parts[0].toLowerCase())
+  if (mIdx === -1) return null
+  const year = parseInt(parts[parts.length - 1])
+  if (!year) return null
+  return `${year}-${String(mIdx + 1).padStart(2, '0')}`
+}
+
+function parseCurrency(label) {
+  return String(label || '').toLowerCase().includes('peso') ? 'pesos' : 'dollars'
+}
+
+function parseSheets(wb) {
+  const toRows = name => {
+    const ws = wb.Sheets[name]
+    return ws ? XLSX.utils.sheet_to_json(ws, { header: 1 }) : []
+  }
+
+  // Resumen
+  const resMap = {}
+  toRows('Resumen').forEach(r => { if (r[0]) resMap[String(r[0])] = r[1] })
+  const month      = parseMonthLabel(resMap['Mes']) || null
+  const dollarRate = resMap['Cotización USD ($)'] != null ? String(resMap['Cotización USD ($)']) : null
+  const budget     = resMap['Presupuesto mensual ($)'] != null ? (parseFloat(resMap['Presupuesto mensual ($)']) || null) : null
+
+  // Ingresos
+  const incMap = {}
+  toRows('Ingresos').slice(1).forEach(r => { if (r[0]) incMap[String(r[0])] = r[1] })
+  const income = {
+    pesos:   parseFloat(incMap['Pesos ($)'])     || 0,
+    dollars: parseFloat(incMap['Dólares (USD)']) || 0,
+  }
+
+  // Tarjetas
+  const cards = toRows('Tarjetas').slice(1)
+    .filter(r => r[0] || r[2] || r[3])
+    .map((r, i) => ({
+      id:      i + 1,
+      bank:    /^sin nombre$/i.test(String(r[0] || '')) ? '' : String(r[0] || ''),
+      type:    String(r[1] || 'visa').toLowerCase(),
+      pesos:   parseFloat(r[2]) || 0,
+      dollars: parseFloat(r[3]) || 0,
+    }))
+
+  // Alquiler
+  const rentRow = toRows('Alquiler').slice(1)[0]
+  const rent    = parseFloat(rentRow?.[1]) || 0
+
+  // Gastos Fijos (snapshot info — managed globally, returned for informational use)
+  const fixedExpenses = toRows('Gastos Fijos').slice(1)
+    .filter(r => r[0])
+    .map((r, i) => ({
+      id:          `imp_${i}`,
+      description: /^sin descripción$/i.test(String(r[0])) ? '' : String(r[0]),
+      currency:    parseCurrency(r[1]),
+      amount:      parseFloat(r[2]) || 0,
+    }))
+
+  // Otros Gastos
+  const otherExpenses = toRows('Otros Gastos').slice(1)
+    .filter(r => r[0] || r[3])
+    .map((r, i) => ({
+      id:          i + 1,
+      description: /^sin descripción$/i.test(String(r[0] || '')) ? '' : String(r[0] || ''),
+      category:    String(r[1] || 'Otros'),
+      currency:    parseCurrency(r[2]),
+      amount:      parseFloat(r[3]) || 0,
+      notes:       String(r[4] || ''),
+    }))
+
+  return { month, dollarRate, budget, income, cards, rent, fixedExpenses, otherExpenses, totals: {} }
+}
+
+// Tries _JSON sheet (previously exported files) then falls back to human-readable sheets.
+// Returns { report, source: 'json'|'sheets', fixedFromFile } or null on failure.
+export function importXLSX(arrayBuffer) {
+  try {
+    const wb = XLSX.read(arrayBuffer, { type: 'array' })
+
+    // Fast path: use embedded JSON (previously exported by the app)
+    const ws = wb.Sheets['_JSON']
+    if (ws) {
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1 })
+      const json = rows[1]?.[0]
+      if (json) {
+        const report = JSON.parse(String(json))
+        if (report.month) return { report, source: 'json', fixedFromFile: report.fixedExpenses || [] }
+      }
+    }
+
+    // Fallback: parse human-readable sheets
+    const parsed = parseSheets(wb)
+    if (!parsed.income) return null
+    const { fixedExpenses: fixedFromFile, ...report } = parsed
+    return { report, source: 'sheets', fixedFromFile }
+  } catch {
+    return null
+  }
+}

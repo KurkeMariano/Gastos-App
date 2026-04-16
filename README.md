@@ -33,6 +33,7 @@ App personal para registrar ingresos y gastos mes a mes, con soporte **pesos y d
 - Se incluyen solos en cada nuevo mes
 - Al eliminar, el gasto sigue activo el mes actual y desaparece desde el siguiente
 - La tab **Fijos** muestra activos, historial de precios e inactivos
+- **Importar desde historial**: si existen fijos embebidos en reportes guardados pero no en la lista global, aparece el botón "↓ Importar desde historial (N)"; permite seleccionar individualmente cada ítem (con mes de origen y monto), evita duplicados por descripción + moneda
 
 ### Analítica
 
