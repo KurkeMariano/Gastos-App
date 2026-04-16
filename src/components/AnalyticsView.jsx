@@ -1,5 +1,18 @@
 import { C } from '../constants'
 import { computeAnalytics, fmtP, fmtK, monthLabel, monthShort, sign, clamp } from '../utils'
+
+function committedColor(rate) {
+  if (rate < 50) return C.green
+  if (rate < 70) return C.amber
+  return C.red
+}
+
+function committedLabel(rate) {
+  if (rate < 40) return 'Excelente flexibilidad presupuestaria.'
+  if (rate < 55) return 'Margen razonable de gasto discrecional.'
+  if (rate < 70) return 'Ingreso discrecional ajustado.'
+  return 'Ingreso discrecional muy comprometido.'
+}
 import BarChart   from './BarChart'
 import DonutChart from './DonutChart'
 
@@ -54,6 +67,33 @@ export default function AnalyticsView({ history, syncStatus, budget }) {
           </div>
         ))}
       </div>
+
+      {/* ── Committed income rate ───────────────────────────────────── */}
+      {a.committedRate != null && (
+        <div style={{background:C.card,border:`1px solid ${committedColor(a.committedRate)}33`,borderRadius:'12px',padding:'1.25rem',marginBottom:'1.25rem'}}>
+          <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.amber,marginBottom:'1rem'}}>// INGRESO COMPROMETIDO EN FIJOS</div>
+          <div style={{display:'flex',gap:'1rem',flexWrap:'wrap',alignItems:'flex-start',marginBottom:'0.9rem'}}>
+            <div>
+              <div style={{fontSize:'10px',color:C.textMuted,fontFamily:'monospace',marginBottom:'4px'}}>ALQUILER + FIJOS</div>
+              <div style={{fontSize:'28px',fontWeight:700,fontFamily:'monospace',color:committedColor(a.committedRate),lineHeight:1}}>{a.committedRate.toFixed(1)}%</div>
+              <div style={{fontSize:'11px',color:C.textMuted,fontFamily:'monospace',marginTop:'4px'}}>{fmtP(a.committed)} de {fmtP(a.last.income?.pesos||0)}</div>
+            </div>
+            <div style={{flex:1,minWidth:'140px',paddingTop:'4px'}}>
+              <div style={{background:C.surface,borderRadius:'4px',height:'8px',overflow:'hidden',marginBottom:'6px'}}>
+                <div style={{height:'8px',width:`${clamp(a.committedRate,0,100)}%`,background:committedColor(a.committedRate),borderRadius:'4px',transition:'width 0.3s'}}/>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:'10px',fontFamily:'monospace',color:C.textMuted}}>
+                <span>0%</span>
+                <span style={{color:committedColor(a.committedRate),fontWeight:600}}>libre: {(100 - a.committedRate).toFixed(1)}%</span>
+                <span>100%</span>
+              </div>
+            </div>
+          </div>
+          <div style={{fontSize:'11px',fontFamily:'monospace',color:C.textMuted,borderTop:`1px solid ${C.border}`,paddingTop:'0.6rem'}}>
+            {committedLabel(a.committedRate)}
+          </div>
+        </div>
+      )}
 
       {/* ── Budget adherence ────────────────────────────────────────── */}
       {budget != null && (

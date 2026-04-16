@@ -38,7 +38,7 @@ export function getFixedAmountForMonth(fe, month) {
 
 export function getActiveFixed(fixedExpenses, month) {
   return fixedExpenses
-    .filter(fe => fe.createdMonth <= month && (fe.deletedMonth === null || fe.deletedMonth > month))
+    .filter(fe => fe.createdMonth <= month && (fe.deletedMonth === null || fe.deletedMonth >= month))
     .map(fe => ({ id: fe.id, description: fe.description, currency: fe.currency, amount: getFixedAmountForMonth(fe, month) }))
 }
 
@@ -180,12 +180,12 @@ export function computeAnalytics(history) {
   const last     = sorted[sorted.length-1]
   const prev     = sorted.length > 1 ? sorted[sorted.length-2] : null
 
-  // Top accumulated items
+  // Top accumulated items — otros gastos grouped by category (falls back to description for old entries)
   const allItems = {}
   sorted.forEach(h => {
     h.cards?.forEach(c => { const k=`${c.bank||'Sin nombre'} (${c.type?.toUpperCase?.()})`; allItems[k]=(allItems[k]||0)+(c.pesos||0) })
     if (h.rent > 0) allItems['Alquiler'] = (allItems['Alquiler']||0) + h.rent
-    h.otherExpenses?.forEach(e => { if (!e.description && !e.amount) return; const k=e.description||'Sin descripción'; allItems[k]=(allItems[k]||0)+(e.currency==='pesos'?(e.amount||0):0) })
+    h.otherExpenses?.forEach(e => { if (!e.description && !e.amount) return; const k=e.category||e.description||'Sin descripción'; allItems[k]=(allItems[k]||0)+(e.currency==='pesos'?(e.amount||0):0) })
     h.fixedExpenses?.forEach(e => { if (!e.description && !e.amount) return; const k=`[Fijo] ${e.description||'Sin descripción'}`; allItems[k]=(allItems[k]||0)+(e.currency==='pesos'?(e.amount||0):0) })
   })
   const topItems   = Object.entries(allItems).filter(([,v]) => v>0).sort(([,a],[,b]) => b-a).slice(0,6)
@@ -230,6 +230,11 @@ export function computeAnalytics(history) {
     .filter(h => h.month.endsWith(`-${lastMonthStr}`))
     .map(h => ({ year: h.month.split('-')[0], expenses: h.totals?.expensesPesos||0, income: h.income?.pesos||0 }))
 
+  // % of income committed to fixed obligations (rent + fixed expenses in pesos)
+  const lastFixedPesos  = (last.fixedExpenses || []).filter(e => e.currency === 'pesos').reduce((a, e) => a + (e.amount || 0), 0)
+  const committed       = (last.rent || 0) + lastFixedPesos
+  const committedRate   = lastInc > 0 ? (committed / lastInc * 100) : null
+
   return {
     sorted, last, prev,
     topItems, trendData,
@@ -240,5 +245,6 @@ export function computeAnalytics(history) {
     savingsRate, peakMonth, topCards,
     lastFixedTotal, prevFixedTotal, fixedGrowth, fixedChanges, fixedTrend,
     yoyExpGrowth, yoyIncGrowth, sameMonthLY, yoyMonths,
+    committed, committedRate,
   }
 }

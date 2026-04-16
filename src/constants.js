@@ -25,6 +25,18 @@ export const inp        = {background:C.surface,border:`1px solid ${C.borderLigh
 export const sel        = {background:C.surface,border:`1px solid ${C.borderLight}`,borderRadius:'8px',color:C.text,padding:'12px 14px',fontSize:'16px',fontFamily:'monospace',width:'100%',boxSizing:'border-box',outline:'none',cursor:'pointer',WebkitAppearance:'none'}
 export const navBtn     = active => ({background:active?C.amber:'transparent',color:active?'#07090f':C.textDim,border:`1px solid ${active?C.amber:C.border}`,borderRadius:'6px',padding:'8px 12px',fontSize:'12px',cursor:'pointer',fontFamily:'monospace',fontWeight:active?700:400,letterSpacing:'0.5px',touchAction:'manipulation',flex:1})
 
+export const EXPENSE_CATEGORIES = [
+  'Alimentación',
+  'Transporte',
+  'Salud',
+  'Entretenimiento',
+  'Ropa',
+  'Educación',
+  'Servicios',
+  'Mascotas',
+  'Otros',
+]
+
 export const STEPS = [
   {l:'INGRESOS', i:'↑'},
   {l:'TARJETAS', i:'▣'},

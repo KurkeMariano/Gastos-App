@@ -118,11 +118,16 @@ export default function ReportView({ report }) {
           <div style={{fontSize:'10px',fontFamily:'monospace',letterSpacing:'2px',color:C.amber,marginBottom:'0.6rem'}}>//  OTROS GASTOS</div>
           {report.otherExpenses.filter(e => e.description || e.amount).map((e, i, arr) => (
             <div key={i} style={i === arr.length-1 ? {...rRow,borderBottom:'none'} : rRow}>
-              <div>
-                <span style={{fontFamily:'monospace',fontSize:'12px',color:C.textDim,overflow:'hidden',textOverflow:'ellipsis',maxWidth:'60%',display:'block'}}>{e.description||'Sin descripción'}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:'flex',alignItems:'center',gap:'5px',flexWrap:'wrap'}}>
+                  <span style={{fontFamily:'monospace',fontSize:'12px',color:C.textDim}}>{e.description||'Sin descripción'}</span>
+                  {e.category && e.category !== 'Otros' && (
+                    <span style={{fontSize:'9px',fontFamily:'monospace',color:C.blue,background:`${C.blue}15`,border:`1px solid ${C.blue}33`,borderRadius:'4px',padding:'1px 5px',flexShrink:0}}>{e.category}</span>
+                  )}
+                </div>
                 {e.notes && <span style={{fontFamily:'monospace',fontSize:'10px',color:C.textMuted,fontStyle:'italic'}}>{e.notes}</span>}
               </div>
-              <span style={{fontFamily:'monospace',color:C.red,fontSize:'13px'}}>{e.currency==='pesos'?fmtP(e.amount):fmtD(e.amount)}</span>
+              <span style={{fontFamily:'monospace',color:C.red,fontSize:'13px',flexShrink:0,marginLeft:'8px'}}>{e.currency==='pesos'?fmtP(e.amount):fmtD(e.amount)}</span>
             </div>
           ))}
         </div>

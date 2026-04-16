@@ -1,6 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { GOOGLE_CLIENT_ID, DRIVE_FOLDER_ID, DRIVE_SCOPE } from '../constants'
 import { parseReportFromCSV } from '../utils'
+import { parseReportFromXLSX } from '../buildXLSX'
+
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 export function useDrive(onHistoryLoaded) {
   const [token,      setToken]      = useState(null)
@@ -19,24 +22,25 @@ export function useDrive(onHistoryLoaded) {
     return res
   }, [])
 
+  // Lists both old CSV and new XLSX report files
   const listReportFiles = useCallback(async (tk) => {
     const q = encodeURIComponent(
-      `'${DRIVE_FOLDER_ID}' in parents and name contains 'presupuesto_' and mimeType = 'text/csv' and trashed = false`
+      `'${DRIVE_FOLDER_ID}' in parents and name contains 'presupuesto_' and trashed = false`
     )
     const res = await driveGet(
-      `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&orderBy=name&pageSize=100`,
+      `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,modifiedTime)&orderBy=name&pageSize=100`,
       tk
     )
     const data = await res.json()
     return data.files || []
   }, [driveGet])
 
-  const downloadFile = useCallback(async (fileId, tk) => {
+  const downloadFile = useCallback(async (fileId, tk, asBuffer = false) => {
     const res = await driveGet(
       `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
       tk
     )
-    return res.text()
+    return asBuffer ? res.arrayBuffer() : res.text()
   }, [driveGet])
 
   const syncHistory = useCallback(async (tk) => {
@@ -48,9 +52,16 @@ export function useDrive(onHistoryLoaded) {
       const reports = []
       await Promise.all(files.map(async f => {
         try {
-          const text   = await downloadFile(f.id, tk)
-          const report = parseReportFromCSV(text)
-          if (report) reports.push({ ...report, _driveFileId: f.id })
+          const isXLSX = f.mimeType === XLSX_MIME || f.name.endsWith('.xlsx')
+          if (isXLSX) {
+            const buf    = await downloadFile(f.id, tk, true)
+            const report = parseReportFromXLSX(buf)
+            if (report) reports.push({ ...report, _driveFileId: f.id })
+          } else {
+            const text   = await downloadFile(f.id, tk, false)
+            const report = parseReportFromCSV(text)
+            if (report) reports.push({ ...report, _driveFileId: f.id })
+          }
         } catch (e) {
           console.warn(`Could not parse ${f.name}:`, e)
         }
@@ -103,19 +114,25 @@ export function useDrive(onHistoryLoaded) {
     setSyncStatus('idle')
   }
 
-  const uploadCSV = useCallback(async (filename, content, existingFileId) => {
+  // Uploads an XLSX Blob; when updating an existing file, also updates its
+  // metadata (name + MIME type) so old CSV files migrate to XLSX cleanly.
+  const uploadXLSX = useCallback(async (filename, blob, existingFileId) => {
     if (!token) throw new Error('not_connected')
-    const blob = new Blob(['\ufeff'+content], { type: 'text/csv' })
 
     if (existingFileId) {
+      // Multipart PATCH: update content + metadata (name & MIME type) in one request
+      const metadata = { name: filename, mimeType: XLSX_MIME }
+      const body = new FormData()
+      body.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
+      body.append('file', blob)
       const res = await fetch(
-        `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=media`,
-        { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/csv' }, body: blob }
+        `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`,
+        { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body }
       )
       if (!res.ok) throw new Error(`Update failed: ${res.status}`)
       return { id: existingFileId }
     } else {
-      const metadata = { name: filename, parents: [DRIVE_FOLDER_ID], mimeType: 'text/csv' }
+      const metadata = { name: filename, parents: [DRIVE_FOLDER_ID], mimeType: XLSX_MIME }
       const body = new FormData()
       body.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
       body.append('file', blob)
@@ -145,5 +162,5 @@ export function useDrive(onHistoryLoaded) {
     }
   }
 
-  return { token, status, syncStatus, syncCount, connect, disconnect, uploadCSV, deleteFile, isConfigured: !!GOOGLE_CLIENT_ID }
+  return { token, status, syncStatus, syncCount, connect, disconnect, uploadXLSX, deleteFile, isConfigured: !!GOOGLE_CLIENT_ID }
 }

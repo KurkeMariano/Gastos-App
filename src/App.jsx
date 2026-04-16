@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef } from 'react'
-import { C, btnPrimary, btnAdd, btnSec, btnDanger, inp, sel, navBtn, STEPS } from './constants'
+import { C, btnPrimary, btnAdd, btnSec, btnDanger, inp, sel, navBtn, STEPS, EXPENSE_CATEGORIES } from './constants'
 import {
-  LS, buildCSV, mergeHistory, computeAnalytics,
+  LS, mergeHistory, computeAnalytics,
   getCurrentMonth, monthLabel, getActiveFixed,
   fmtP, fmtD, pct,
 } from './utils'
+import { buildXLSX, buildHistoryXLSX, workbookToBlob } from './buildXLSX'
 import { validateCards, filterCards, mapCardsFromReport, mapOthersFromReport } from './logic'
 import { useDrive }          from './hooks/useDrive'
 import DriveButton           from './components/DriveButton'
@@ -32,7 +33,7 @@ export default function App() {
     {id:4, bank:'', type:'mastercard', pesos:'', dollars:''},
   ])
   const [rent,          setRent]          = useState('')
-  const [others,        setOthers]        = useState([{id:1, description:'', amount:'', currency:'pesos', notes:''}])
+  const [others,        setOthers]        = useState([{id:1, description:'', amount:'', currency:'pesos', notes:'', category:'Otros'}])
   const [finalized,     setFinalized]     = useState(false)
   const [errors,        setErrors]        = useState({})
   const [saveMsg,       setSaveMsg]       = useState(null)
@@ -61,7 +62,7 @@ export default function App() {
   const addCard  = () => setCards(p => [...p, {id:cardId.current++, bank:'', type:'visa', pesos:'', dollars:''}])
   const rmCard   = id => setCards(p => p.filter(c => c.id !== id))
   const updCard  = (id, f, v) => { if ((f==='pesos'||f==='dollars') && v !== '' && parseFloat(v) < 0) return; setCards(p => p.map(c => c.id===id ? {...c,[f]:v} : c)) }
-  const addOther = () => setOthers(p => [...p, {id:othId.current++, description:'', amount:'', currency:'pesos', notes:''}])
+  const addOther = () => setOthers(p => [...p, {id:othId.current++, description:'', amount:'', currency:'pesos', notes:'', category:'Otros'}])
   const rmOther  = id => setOthers(p => p.filter(e => e.id !== id))
   const updOther = (id, f, v) => { if (f==='amount' && v !== '' && parseFloat(v) < 0) return; setOthers(p => p.map(e => e.id===id ? {...e,[f]:v} : e)) }
 
@@ -161,21 +162,22 @@ export default function App() {
     }
   }
 
-  const buildReportCSV = (report) => {
-    const nh  = [report, ...history.filter(h => h.month !== report.month)]
-    const csv = buildCSV(report, computeAnalytics(nh))
-    return { csv, filename: `presupuesto_${report.month}.csv`, nh }
+  const buildReportXLSX = (report) => {
+    const nh   = [report, ...history.filter(h => h.month !== report.month)]
+    const wb   = buildXLSX(report, computeAnalytics(nh))
+    const blob = workbookToBlob(wb)
+    return { blob, filename: `presupuesto_${report.month}.xlsx`, nh }
   }
 
   // ── Drive auto-save ──────────────────────────────────────────────────────────
   const saveToDrive = async (report) => {
     if (drive.status !== 'connected') return
     try {
-      const { csv, filename } = buildReportCSV(report)
-      const existing          = history.find(h => h.month === report.month)
-      const fileId            = existing?._driveFileId || null
-      const result            = await drive.uploadCSV(filename, csv, fileId)
-      const tagged            = {...report, _driveFileId: result.id}
+      const { blob, filename } = buildReportXLSX(report)
+      const existing           = history.find(h => h.month === report.month)
+      const fileId             = existing?._driveFileId || null
+      const result             = await drive.uploadXLSX(filename, blob, fileId)
+      const tagged             = {...report, _driveFileId: result.id}
       persist([tagged, ...history.filter(h => h.month !== report.month)])
       setSaveMsg({type:'ok', text:`✓ Guardado en Drive: ${filename}`})
     } catch (err) {
@@ -183,12 +185,11 @@ export default function App() {
     }
   }
 
-  // ── Local CSV download ───────────────────────────────────────────────────────
-  const downloadLocalCSV = (report) => {
-    const { csv, filename } = buildReportCSV(report)
-    const blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8;'})
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
+  // ── Local XLSX download ──────────────────────────────────────────────────────
+  const downloadLocalXLSX = (report) => {
+    const { blob, filename } = buildReportXLSX(report)
+    const url = URL.createObjectURL(blob)
+    const a   = document.createElement('a')
     a.href = url; a.download = filename; a.click()
     URL.revokeObjectURL(url)
   }
@@ -196,12 +197,10 @@ export default function App() {
   // ── Export entire history ────────────────────────────────────────────────────
   const exportAllHistory = () => {
     if (!history.length) return
-    const sorted = [...history].sort((a,b) => b.month.localeCompare(a.month))
-    const parts  = sorted.map(r => `## ${monthLabel(r.month)} ##\n\n${buildCSV(r, null)}`)
-    const blob   = new Blob(['\ufeff' + parts.join('\n\n' + '─'.repeat(60) + '\n\n')], {type:'text/csv;charset=utf-8;'})
-    const url    = URL.createObjectURL(blob)
-    const a      = document.createElement('a')
-    a.href = url; a.download = 'presup_historial_completo.csv'; a.click()
+    const blob = workbookToBlob(buildHistoryXLSX(history))
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = 'presup_historial_completo.xlsx'; a.click()
     URL.revokeObjectURL(url)
   }
 
@@ -249,7 +248,7 @@ export default function App() {
       {id:4, bank:'', type:'mastercard', pesos:'', dollars:''},
     ])
     setRent('')
-    setOthers([{id:1, description:'', amount:'', currency:'pesos', notes:''}])
+    setOthers([{id:1, description:'', amount:'', currency:'pesos', notes:'', category:'Otros'}])
     setFinalized(false)
     setErrors({})
     setSelMonth(getCurrentMonth())
@@ -474,10 +473,17 @@ export default function App() {
                       </div>
                       <button className="del-btn" style={{...btnDanger, paddingTop:'12px', paddingBottom:'12px'}} onClick={() => rmOther(e.id)}>✕</button>
                     </div>
-                    {/* Note toggle */}
+                    {/* Category + note row */}
                     <div style={{marginTop:'6px',display:'flex',alignItems:'center',gap:'6px'}}>
+                      <select
+                        value={e.category||'Otros'}
+                        onChange={ev => updOther(e.id,'category',ev.target.value)}
+                        style={{...sel, fontSize:'12px', padding:'5px 8px', flex:1}}
+                      >
+                        {EXPENSE_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                      </select>
                       <button
-                        style={{background:'transparent',color:noteOpen[e.id]?C.amber:C.textMuted,border:`1px solid ${noteOpen[e.id]?C.amber+'55':C.border}`,borderRadius:'4px',padding:'2px 8px',fontSize:'10px',fontFamily:'monospace',cursor:'pointer'}}
+                        style={{background:'transparent',color:noteOpen[e.id]?C.amber:C.textMuted,border:`1px solid ${noteOpen[e.id]?C.amber+'55':C.border}`,borderRadius:'4px',padding:'5px 8px',fontSize:'10px',fontFamily:'monospace',cursor:'pointer',whiteSpace:'nowrap'}}
                         onClick={() => setNoteOpen(p => ({...p,[e.id]:!p[e.id]}))}
                       >
                         {noteOpen[e.id] ? '▲ nota' : '＋ nota'}
@@ -485,7 +491,7 @@ export default function App() {
                       {noteOpen[e.id] && (
                         <input type="text" placeholder="Nota opcional…" value={e.notes||''}
                           onChange={ev => updOther(e.id,'notes',ev.target.value)}
-                          style={{...inp, fontSize:'12px', padding:'5px 10px', flex:1}}/>
+                          style={{...inp, fontSize:'12px', padding:'5px 10px', flex:2}}/>
                       )}
                     </div>
                   </div>
@@ -517,6 +523,7 @@ export default function App() {
                 <div style={{display:'flex',flexWrap:'wrap',gap:'5px',marginBottom:'0.5rem'}}>
                   {others.filter(e => e.description||e.amount).map(e => (
                     <span key={e.id} style={{background:C.tag,border:`1px solid ${C.border}`,borderRadius:'6px',padding:'3px 8px',fontSize:'11px',color:C.textDim,fontFamily:'monospace'}}>
+                      {e.category && e.category !== 'Otros' && <span style={{color:C.textMuted,marginRight:'4px'}}>[{e.category}]</span>}
                       {e.description||'Sin nombre'}: {e.currency==='pesos'?fmtP(e.amount):fmtD(e.amount)}
                       {e.notes ? ` — ${e.notes}` : ''}
                     </span>
@@ -601,7 +608,7 @@ export default function App() {
                 </button>
               )}
               {step === 4 && currentReport && (
-                <button style={btnSec} onClick={() => downloadLocalCSV(currentReport)}>↓ Descargar CSV</button>
+                <button style={btnSec} onClick={() => downloadLocalXLSX(currentReport)}>↓ Descargar Excel</button>
               )}
             </div>
           </>
@@ -682,7 +689,7 @@ export default function App() {
                     style={{background:`${C.amber}22`,color:C.amber,border:`1px solid ${C.amber}66`,borderRadius:'8px',padding:'10px 14px',fontSize:'13px',fontFamily:'monospace',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'6px'}}
                     onClick={() => loadFromReport(histDetail)}
                   >✎ Editar mes</button>
-                  <button style={btnSec} onClick={() => downloadLocalCSV(histDetail)}>↓ Descargar CSV</button>
+                  <button style={btnSec} onClick={() => downloadLocalXLSX(histDetail)}>↓ Descargar Excel</button>
                   {drive.status === 'connected' && (
                     <button style={btnPrimary} onClick={() => saveToDrive(histDetail)}>↑ Drive</button>
                   )}

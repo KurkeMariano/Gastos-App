@@ -35,10 +35,11 @@ export function mapOthersFromReport(reportOthers) {
   return (reportOthers || [])
     .filter(e => e.description || e.amount)
     .map((e, i) => ({
-      id: i + 1,
+      id:          i + 1,
       description: e.description || '',
       amount:      String(e.amount || ''),
       currency:    e.currency || 'pesos',
       notes:       e.notes || '',
+      category:    e.category || 'Otros',
     }))
 }
