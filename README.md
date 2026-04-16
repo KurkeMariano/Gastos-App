@@ -60,13 +60,14 @@ Cada ítem de "Otros Gastos" lleva una categoría para que la analítica agregue
 |---------|-------------|
 | **Cargar y editar** | Abre un mes ya guardado en el formulario |
 | **Copiar último mes** | Pre-rellena tarjetas, alquiler y otros del mes anterior |
+| **Importar Excel** | Carga un archivo `.xlsx` externo o creado manualmente en el formulario |
 | **Historial** | Lista completa con detalle, edición, descarga y borrado |
 | **Exportar todo** | Un Excel con el historial resumido de todos los meses |
 | **Google Drive** | Sync automático — un `.xlsx` por mes, actualiza sin duplicar |
 
 ---
 
-## 📊 Exportación Excel (multi-hoja)
+## 📊 Excel — exportación e importación
 
 Cada archivo `presupuesto_YYYY-MM.xlsx` contiene una hoja por sección:
 
@@ -84,6 +85,34 @@ Cada archivo `presupuesto_YYYY-MM.xlsx` contiene una hoja por sección:
 ```
 
 > **"Exportar todo"** genera un único Excel con hoja `Historial` (una fila por mes, todos los períodos).
+
+### Importar un archivo Excel
+
+El botón **"↑ Importar Excel"** (tab *Nuevo mes*, paso Ingresos) permite cargar cualquier `.xlsx` en el formulario para editar y guardar:
+
+```
+  archivo .xlsx
+       │
+       ├── tiene sheet _JSON?  ──→  sí  ──→  parse JSON embebido (recuperación exacta)
+       │                                           │
+       └──────────────────────── no  ──→  parse hojas legibles:
+                                               Resumen    → mes, cotización, presupuesto
+                                               Ingresos   → pesos / dólares
+                                               Tarjetas   → banco, red, montos
+                                               Alquiler   → monto
+                                               Otros Gastos → descripción, categoría,
+                                                              moneda, monto, notas
+                                               Gastos Fijos → informativo (se gestionan
+                                                              globalmente desde tab Fijos)
+                                           │
+                                           ▼
+                                  formulario pre-cargado
+                                  mes editable · modificar → guardar
+```
+
+- Funciona con archivos exportados previamente por la app **y** con archivos creados a mano
+- El mes pre-cargado desde el archivo es editable antes de guardar
+- Si el archivo incluye la hoja *Gastos Fijos*, la app lo informa con un banner: esos ítems se gestionan desde la tab **Fijos**, no se cargan automáticamente al importar
 
 ---
 
@@ -163,6 +192,8 @@ presup/
     │                               · buildHistoryXLSX(history)     → historial consolidado
     │                               · workbookToBlob(wb)            → Blob descargable
     │                               · parseReportFromXLSX(buffer)   → reimportación Drive
+    │                               · importXLSX(buffer)            → importación manual
+    │                                   tries _JSON → fallback a hojas legibles
     │
     ├── hooks/
     │   └── useDrive.js          ← Google Drive completo
